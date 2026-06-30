@@ -112,7 +112,7 @@ fn main() -> io::Result<()> {
     let password_clone = password.clone();
     let running_clone = running.clone();
     
-    let stdout_handle = thread::spawn(move || {
+    thread::spawn(move || {
         let reader = BufReader::new(child_stdout);
         let mut ap_enabled = false;
         
@@ -133,7 +133,7 @@ fn main() -> io::Result<()> {
     });
 
     // Thread to monitor stderr
-    let stderr_handle = thread::spawn(move || {
+    thread::spawn(move || {
         let reader = BufReader::new(child_stderr);
         for line in reader.lines() {
             if let Ok(line) = line {
@@ -154,21 +154,31 @@ fn main() -> io::Result<()> {
     // 8. Cleanup on exit
     println!("Stopping create_ap process group...");
     
-    // Kill sudo create_ap using sudo kill to ensure root process is terminated
+    // Kill the underlying create_ap processes cleanly using pkill
     let _ = Command::new("sudo")
-        .args(&["kill", "-SIGINT", &child.id().to_string()])
+        .args(&["pkill", "-SIGINT", "-f", "create_ap"])
         .status();
-        
+
+    // Kill the spawned sudo wrapper process
     let _ = child.kill();
     let _ = child.wait();
 
-    // Join monitor threads
-    let _ = stdout_handle.join();
-    let _ = stderr_handle.join();
+    // Wait a brief moment to allow create_ap's internal cleanup script to finish running
+    thread::sleep(Duration::from_millis(800));
 
+    // Cleanup virtual interfaces
     cleanup_virtual_interfaces();
+    
+    // Terminate any leftover imv windows
+    let _ = Command::new("pkill")
+        .arg("imv")
+        .status();
+
     println!("Success: Hotspot stopped and cleaned up successfully.");
 
+    // We explicitly avoid stdout_handle.join() and stderr_handle.join() 
+    // to prevent deadlocks when closing the process pipes on Ctrl+C.
+    
     Ok(())
 }
 
