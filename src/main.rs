@@ -1,13 +1,13 @@
+use dialoguer::{Input, Select, theme::ColorfulTheme};
+use image::Luma;
+use qrcode::QrCode;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
-use dialoguer::{theme::ColorfulTheme, Input, Select};
-use qrcode::QrCode;
-use image::Luma;
 
 fn main() -> io::Result<()> {
     println!("Starting Omarchy Hotspot Setup Manager...\n");
@@ -28,7 +28,8 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    let default_internet = detect_default_gateway_interface().unwrap_or_else(|| "wlan0".to_string());
+    let default_internet =
+        detect_default_gateway_interface().unwrap_or_else(|| "wlan0".to_string());
     let default_wifi = interfaces
         .iter()
         .find(|iface| iface.starts_with("wlan"))
@@ -42,7 +43,7 @@ fn main() -> io::Result<()> {
 
     // 5. Interactive prompts using dialoguer
     let theme = ColorfulTheme::default();
-    
+
     let ssid: String = Input::with_theme(&theme)
         .with_prompt("Enter Hotspot SSID (Name)")
         .default("DCT_Linux".to_string())
@@ -50,7 +51,7 @@ fn main() -> io::Result<()> {
 
     let password: String = Input::with_theme(&theme)
         .with_prompt("Enter Hotspot Password (min. 8 chars)")
-        .default("Tryh4ckm3".to_string())
+        .default("Tryh4ckm3;".to_string())
         .validate_with(|input: &String| -> Result<(), &str> {
             if input.len() >= 8 {
                 Ok(())
@@ -64,7 +65,12 @@ fn main() -> io::Result<()> {
     let internet_index = Select::with_theme(&theme)
         .with_prompt("Select interface providing internet")
         .items(&interfaces)
-        .default(interfaces.iter().position(|x| *x == default_internet).unwrap_or(0))
+        .default(
+            interfaces
+                .iter()
+                .position(|x| *x == default_internet)
+                .unwrap_or(0),
+        )
         .interact()?;
     let internet_iface = &interfaces[internet_index];
 
@@ -72,7 +78,12 @@ fn main() -> io::Result<()> {
     let wifi_index = Select::with_theme(&theme)
         .with_prompt("Select Wi-Fi interface to host hotspot")
         .items(&interfaces)
-        .default(interfaces.iter().position(|x| *x == default_wifi).unwrap_or(0))
+        .default(
+            interfaces
+                .iter()
+                .position(|x| *x == default_wifi)
+                .unwrap_or(0),
+        )
         .interact()?;
     let wifi_iface = &interfaces[wifi_index];
 
@@ -88,18 +99,13 @@ fn main() -> io::Result<()> {
     ctrlc::set_handler(move || {
         println!("\nReceived exit signal! Initiating shutdown...");
         r.store(false, Ordering::SeqCst);
-    }).expect("Error setting Ctrl-C handler");
+    })
+    .expect("Error setting Ctrl-C handler");
 
     // 7. Spawn create_ap process
     println!("Starting create_ap...");
     let mut child = Command::new("sudo")
-        .args(&[
-            "create_ap",
-            wifi_iface,
-            internet_iface,
-            &ssid,
-            &password,
-        ])
+        .args(&["create_ap", wifi_iface, internet_iface, &ssid, &password])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -111,11 +117,11 @@ fn main() -> io::Result<()> {
     let ssid_clone = ssid.clone();
     let password_clone = password.clone();
     let running_clone = running.clone();
-    
+
     thread::spawn(move || {
         let reader = BufReader::new(child_stdout);
         let mut ap_enabled = false;
-        
+
         for line in reader.lines() {
             if !running_clone.load(Ordering::SeqCst) {
                 break;
@@ -153,7 +159,7 @@ fn main() -> io::Result<()> {
 
     // 8. Cleanup on exit
     println!("Stopping create_ap process group...");
-    
+
     // Kill the underlying create_ap processes cleanly using pkill
     let _ = Command::new("sudo")
         .args(&["pkill", "-SIGINT", "-f", "create_ap"])
@@ -168,17 +174,15 @@ fn main() -> io::Result<()> {
 
     // Cleanup virtual interfaces
     cleanup_virtual_interfaces();
-    
+
     // Terminate any leftover imv windows
-    let _ = Command::new("pkill")
-        .arg("imv")
-        .status();
+    let _ = Command::new("pkill").arg("imv").status();
 
     println!("Success: Hotspot stopped and cleaned up successfully.");
 
-    // We explicitly avoid stdout_handle.join() and stderr_handle.join() 
+    // We explicitly avoid stdout_handle.join() and stderr_handle.join()
     // to prevent deadlocks when closing the process pipes on Ctrl+C.
-    
+
     Ok(())
 }
 
@@ -236,12 +240,17 @@ fn check_and_patch_create_ap() {
                 let input = input.trim().to_lowercase();
                 if input == "y" || input.is_empty() {
                     println!("Patching /usr/bin/create_ap...");
-                    
+
                     // Apply decimal fix
                     let _ = Command::new("sudo")
-                        .args(&["sed", "-i", "/WIFI_IFACE_FREQ=/s/awk '{print $2}'/awk '{print $2}' | cut -d. -f1/", "/usr/bin/create_ap"])
+                        .args(&[
+                            "sed",
+                            "-i",
+                            "/WIFI_IFACE_FREQ=/s/awk '{print $2}'/awk '{print $2}' | cut -d. -f1/",
+                            "/usr/bin/create_ap",
+                        ])
                         .status();
-                        
+
                     // Apply can_transmit_to_channel override
                     let _ = Command::new("sudo")
                         .args(&["sed", "-i", "s/can_transmit_to_channel() {/can_transmit_to_channel() {\\n    return 0/g", "/usr/bin/create_ap"])
@@ -257,7 +266,8 @@ fn check_and_patch_create_ap() {
 fn save_qr_code_png(ssid: &str, password: &str) -> Option<String> {
     let wifi_str = format!("WIFI:T:WPA;S:{};P:{};;", ssid, password);
     if let Ok(code) = QrCode::new(wifi_str.as_bytes()) {
-        let image = code.render::<Luma<u8>>()
+        let image = code
+            .render::<Luma<u8>>()
             .quiet_zone(true)
             .module_dimensions(10, 10) // 10x10 pixels per QR module for a crisp high-res image
             .build();
@@ -386,7 +396,9 @@ fn check_dependencies() {
                 args.extend(&missing);
                 let status = Command::new("sudo").args(&args).status();
                 match status {
-                    Ok(s) if s.success() => println!("Success: Dependencies installed successfully!"),
+                    Ok(s) if s.success() => {
+                        println!("Success: Dependencies installed successfully!")
+                    }
                     _ => {
                         eprintln!("Error: Failed to install dependencies automatically.");
                         eprintln!("   Please run: sudo pacman -S {}", missing.join(" "));
@@ -394,7 +406,9 @@ fn check_dependencies() {
                     }
                 }
             } else {
-                println!("Error: Dependencies are missing. The hotspot manager cannot run without them.");
+                println!(
+                    "Error: Dependencies are missing. The hotspot manager cannot run without them."
+                );
                 std::process::exit(1);
             }
         }
