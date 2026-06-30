@@ -11,7 +11,7 @@ An interactive, terminal-based Wi-Fi hotspot manager built in Rust, tailored for
 
 ---
 
-## 🚀 Features
+## Features
 
 *   **Dependency Doctor:** Validates system requirements (`create_ap`, `hostapd`, `dnsmasq`) at startup and offers to auto-install missing packages using `pacman`.
 *   **Auto-Cleanup Daemon:** Detects and deletes orphaned virtual interfaces (like `ap0`, `ap1`, `ap2`) left by failed or interrupted hotspot sessions, avoiding `Device or resource busy` errors.
@@ -32,11 +32,28 @@ An interactive, terminal-based Wi-Fi hotspot manager built in Rust, tailored for
 
 ## 💻 Usage
 
-### Quick Start
-To build and run the hotspot manager:
+### Quick Install (Precompiled Binary)
+If you do not have Rust or Cargo installed, you can download the precompiled binary directly from the [GitHub Releases](https://github.com/DCT-Berinyuy/omarchy-hotspot/releases) page:
 
 ```bash
-# Clone the repository (if not already local)
+# Download the latest binary
+curl -L -O https://github.com/DCT-Berinyuy/omarchy-hotspot/releases/download/v0.1.0/omarchy-hotspot
+
+# Make it executable
+chmod +x omarchy-hotspot
+
+# Install it globally
+sudo mv omarchy-hotspot /usr/local/bin/
+
+# Start the hotspot manager from anywhere
+sudo omarchy-hotspot
+```
+
+### Build from Source
+If you prefer to build the program from source (requires Cargo/Rust):
+
+```bash
+# Clone the repository
 git clone https://github.com/DCT-Berinyuy/omarchy-hotspot.git
 cd omarchy-hotspot
 
