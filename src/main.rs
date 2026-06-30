@@ -1,3 +1,270 @@
-fn main() {
-    println!("Hello, world!");
+use std::fs;
+use std::io::{self, BufRead, BufReader, Write};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+use dialoguer::{theme::ColorfulTheme, Input, Select};
+use qrcode::QrCode;
+use qrcode::render::unicode;
+
+fn main() -> io::Result<()> {
+    println!("🚀 Starting Omarchy Hotspot Setup Manager...\n");
+
+    // 1. Check and apply patch if needed
+    check_and_patch_create_ap();
+
+    // 2. Cleanup leftover interfaces
+    cleanup_virtual_interfaces();
+
+    // 3. Detect network interfaces
+    let interfaces = get_network_interfaces();
+    if interfaces.is_empty() {
+        eprintln!("❌ No network interfaces found!");
+        return Ok(());
+    }
+
+    let default_internet = detect_default_gateway_interface().unwrap_or_else(|| "wlan0".to_string());
+    let default_wifi = interfaces
+        .iter()
+        .find(|iface| iface.starts_with("wlan"))
+        .cloned()
+        .unwrap_or_else(|| "wlan0".to_string());
+
+    println!("🔍 Detected network interfaces: {:?}", interfaces);
+    println!("💡 Suggested Internet Source: {}", default_internet);
+    println!("💡 Suggested Wi-Fi Adapter: {}", default_wifi);
+    println!();
+
+    // 4. Interactive prompts using dialoguer
+    let theme = ColorfulTheme::default();
+    
+    let ssid: String = Input::with_theme(&theme)
+        .with_prompt("Enter Hotspot SSID (Name)")
+        .default("DCT_Linux".to_string())
+        .interact_text()?;
+
+    let password: String = Input::with_theme(&theme)
+        .with_prompt("Enter Hotspot Password (min. 8 chars)")
+        .default("Tryh4ckm3".to_string())
+        .validate_with(|input: &String| -> Result<(), &str> {
+            if input.len() >= 8 {
+                Ok(())
+            } else {
+                Err("Password must be at least 8 characters long")
+            }
+        })
+        .interact_text()?;
+
+    // Select internet interface
+    let internet_index = Select::with_theme(&theme)
+        .with_prompt("Select interface providing internet")
+        .items(&interfaces)
+        .default(interfaces.iter().position(|x| *x == default_internet).unwrap_or(0))
+        .interact()?;
+    let internet_iface = &interfaces[internet_index];
+
+    // Select wifi interface
+    let wifi_index = Select::with_theme(&theme)
+        .with_prompt("Select Wi-Fi interface to host hotspot")
+        .items(&interfaces)
+        .default(interfaces.iter().position(|x| *x == default_wifi).unwrap_or(0))
+        .interact()?;
+    let wifi_iface = &interfaces[wifi_index];
+
+    println!("\n🌐 Configuration Summary:");
+    println!("   SSID:      {}", ssid);
+    println!("   Password:  {}", password);
+    println!("   Sharing:   {} ➔ {}", internet_iface, wifi_iface);
+    println!();
+
+    // 5. Setup exit signal handling
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        println!("\n🛑 Received exit signal! Initiating shutdown...");
+        r.store(false, Ordering::SeqCst);
+    }).expect("Error setting Ctrl-C handler");
+
+    // 6. Spawn create_ap process
+    println!("⚡ Starting create_ap...");
+    let mut child = Command::new("sudo")
+        .args(&[
+            "create_ap",
+            wifi_iface,
+            internet_iface,
+            &ssid,
+            &password,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let child_stdout = child.stdout.take().expect("Failed to open stdout");
+    let child_stderr = child.stderr.take().expect("Failed to open stderr");
+
+    // Thread to monitor stdout and show TUI when AP is enabled
+    let ssid_clone = ssid.clone();
+    let password_clone = password.clone();
+    let running_clone = running.clone();
+    
+    let stdout_handle = thread::spawn(move || {
+        let reader = BufReader::new(child_stdout);
+        let mut ap_enabled = false;
+        
+        for line in reader.lines() {
+            if !running_clone.load(Ordering::SeqCst) {
+                break;
+            }
+            if let Ok(line) = line {
+                if !ap_enabled {
+                    println!("   [create_ap] {}", line);
+                }
+                if line.contains("AP-ENABLED") {
+                    ap_enabled = true;
+                    show_dashboard(&ssid_clone, &password_clone);
+                }
+            }
+        }
+    });
+
+    // Thread to monitor stderr
+    let stderr_handle = thread::spawn(move || {
+        let reader = BufReader::new(child_stderr);
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                eprintln!("   [create_ap error] {}", line);
+            }
+        }
+    });
+
+    // Main loop: Wait until exit signal
+    while running.load(Ordering::SeqCst) {
+        if let Ok(Some(_)) = child.try_wait() {
+            println!("❌ create_ap terminated unexpectedly.");
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    // 7. Cleanup on exit
+    println!("🔌 Stopping create_ap process group...");
+    
+    // Kill sudo create_ap using sudo kill to ensure root process is terminated
+    let _ = Command::new("sudo")
+        .args(&["kill", "-SIGINT", &child.id().to_string()])
+        .status();
+        
+    let _ = child.kill();
+    let _ = child.wait();
+
+    // Join monitor threads
+    let _ = stdout_handle.join();
+    let _ = stderr_handle.join();
+
+    cleanup_virtual_interfaces();
+    println!("✅ Hotspot stopped and cleaned up successfully.");
+
+    Ok(())
+}
+
+fn get_network_interfaces() -> Vec<String> {
+    let mut interfaces = Vec::new();
+    if let Ok(entries) = fs::read_dir("/sys/class/net") {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                if let Some(name) = entry.file_name().to_str() {
+                    // Filter out loopback
+                    if name != "lo" {
+                        interfaces.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    interfaces.sort();
+    interfaces
+}
+
+fn detect_default_gateway_interface() -> Option<String> {
+    if let Ok(content) = fs::read_to_string("/proc/net/route") {
+        for line in content.lines().skip(1) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() >= 2 && fields[1] == "00000000" {
+                return Some(fields[0].to_string());
+            }
+        }
+    }
+    None
+}
+
+fn cleanup_virtual_interfaces() {
+    println!("🧹 Cleaning up leftover virtual AP interfaces...");
+    let interfaces = get_network_interfaces();
+    for iface in interfaces {
+        if iface.starts_with("ap") {
+            println!("  Deleting {}...", iface);
+            let _ = Command::new("sudo")
+                .args(&["iw", "dev", &iface, "del"])
+                .status();
+        }
+    }
+}
+
+fn check_and_patch_create_ap() {
+    if let Ok(content) = fs::read_to_string("/usr/bin/create_ap") {
+        if !content.contains("cut -d. -f1") {
+            println!("⚠️ Legacy create_ap bug detected (frequency decimal parsing).");
+            print!("Do you want to patch /usr/bin/create_ap automatically? [Y/n]: ");
+            let _ = io::stdout().flush();
+            let mut input = String::new();
+            if io::stdin().read_line(&mut input).is_ok() {
+                let input = input.trim().to_lowercase();
+                if input == "y" || input.is_empty() {
+                    println!("🔧 Patching /usr/bin/create_ap...");
+                    
+                    // Apply decimal fix
+                    let _ = Command::new("sudo")
+                        .args(&["sed", "-i", "/WIFI_IFACE_FREQ=/s/awk '{print $2}'/awk '{print $2}' | cut -d. -f1/", "/usr/bin/create_ap"])
+                        .status();
+                        
+                    // Apply can_transmit_to_channel override
+                    let _ = Command::new("sudo")
+                        .args(&["sed", "-i", "s/can_transmit_to_channel() {/can_transmit_to_channel() {\\n    return 0/g", "/usr/bin/create_ap"])
+                        .status();
+
+                    println!("✅ Patches applied successfully!");
+                }
+            }
+        }
+    }
+}
+
+fn show_dashboard(ssid: &str, password: &str) {
+    // Clear screen and move cursor to top-left
+    print!("{}[2J{}[1;1H", 27 as char, 27 as char);
+    let _ = io::stdout().flush();
+
+    println!("========================================================");
+    println!("🎉          DCT OMARCHY HOTSPOT IS ACTIVE              🎉");
+    println!("========================================================");
+    println!();
+    println!("   SSID (Name):   \x1b[1;32m{}\x1b[0m", ssid);
+    println!("   Password:      \x1b[1;32m{}\x1b[0m", password);
+    println!();
+    println!("📲 Scan the QR Code below to connect automatically:");
+    println!();
+
+    let wifi_str = format!("WIFI:S:{};T:WPA;P:{};;", ssid, password);
+    if let Ok(code) = QrCode::new(wifi_str.as_bytes()) {
+        let image = code.render::<unicode::Dense1x2>()
+            .quiet_zone(true)
+            .build();
+        println!("{}", image);
+    }
+    println!();
+    println!("========================================================");
+    println!("Press Ctrl+C at any time to stop the hotspot.");
+    println!("========================================================");
 }

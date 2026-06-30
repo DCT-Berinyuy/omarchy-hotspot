@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+crossterm = "0.29.0"
+ctrlc = "3.5.2"
+dialoguer = "0.12.0"
+qrcode = "0.14.1"
