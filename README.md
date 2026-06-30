@@ -1,4 +1,9 @@
+<p align="center">
+  <img src="assets/Graphical Logo.png" width="200" alt="omarchy-hotspot Logo">
+</p>
+
 # omarchy-hotspot
+
 
 An interactive, terminal-based Wi-Fi hotspot manager built in Rust, tailored for Arch Linux configurations (like Omarchy) running minimalist Wayland compositors (like Hyprland).
 
