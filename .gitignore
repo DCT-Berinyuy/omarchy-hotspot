@@ -1,6 +1,7 @@
 /target
 Cargo.lock
 **/*.rs.bk
+video_script.md
 
 
 # Added by cargo
