@@ -7,6 +7,7 @@ use std::thread;
 use std::time::Duration;
 use dialoguer::{theme::ColorfulTheme, Input, Select};
 use qrcode::QrCode;
+use image::Luma;
 
 fn main() -> io::Result<()> {
     println!("Starting Omarchy Hotspot Setup Manager...\n");
@@ -243,6 +244,21 @@ fn check_and_patch_create_ap() {
     }
 }
 
+fn save_qr_code_png(ssid: &str, password: &str) -> Option<String> {
+    let wifi_str = format!("WIFI:T:WPA;S:{};P:{};;", ssid, password);
+    if let Ok(code) = QrCode::new(wifi_str.as_bytes()) {
+        let image = code.render::<Luma<u8>>()
+            .quiet_zone(true)
+            .module_dimensions(10, 10) // 10x10 pixels per QR module for a crisp high-res image
+            .build();
+        let path = "/tmp/omarchy_hotspot_qr.png";
+        if image.save(path).is_ok() {
+            return Some(path.to_string());
+        }
+    }
+    None
+}
+
 fn show_dashboard(ssid: &str, password: &str) {
     // Clear screen and move cursor to top-left
     print!("{}[2J{}[1;1H", 27 as char, 27 as char);
@@ -255,19 +271,28 @@ fn show_dashboard(ssid: &str, password: &str) {
     println!("   SSID (Name):   \x1b[1;32m{}\x1b[0m", ssid);
     println!("   Password:      \x1b[1;32m{}\x1b[0m", password);
     println!();
-    println!("Scan the QR Code below to connect automatically:");
+
+    // 1. Save and open the QR Code PNG using imv (visual pop-up)
+    if let Some(path) = save_qr_code_png(ssid, password) {
+        println!("Opening high-contrast QR Code in image viewer (imv)...");
+        let _ = Command::new("imv")
+            .arg(&path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+
+    println!();
+    println!("Scan the QR Code on your screen to connect automatically.");
+    println!("If the image window didn't open, here is a terminal fallback:");
     println!();
 
-    // Standard format: WIFI:T:WPA;S:SSID;P:PASSWORD;;
+    // 2. Terminal Fallback QR Code
     let wifi_str = format!("WIFI:T:WPA;S:{};P:{};;", ssid, password);
     if let Ok(code) = QrCode::new(wifi_str.as_bytes()) {
         let width = code.width();
         let quiet_zone = 2;
 
-        // ANSI background color codes:
-        // \x1b[47m = White background
-        // \x1b[40m = Black background
-        // \x1b[0m  = Reset formatting
         let white_block = "\x1b[47m  ";
         let black_block = "\x1b[40m  ";
         let reset_color = "\x1b[0m";
@@ -287,9 +312,9 @@ fn show_dashboard(ssid: &str, password: &str) {
             }
             for x in 0..width {
                 if code[(x, y)] == qrcode::Color::Dark {
-                    print!("{}", black_block); // Black data block (using background escape code)
+                    print!("{}", black_block);
                 } else {
-                    print!("{}", white_block); // White background block (using background escape code)
+                    print!("{}", white_block);
                 }
             }
             // Right quiet zone
@@ -319,6 +344,7 @@ fn check_dependencies() {
         ("create_ap", "create_ap"),
         ("hostapd", "hostapd"),
         ("dnsmasq", "dnsmasq"),
+        ("imv", "imv"),
     ];
 
     let mut missing = Vec::new();
