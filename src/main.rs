@@ -19,8 +19,9 @@ fn main() -> io::Result<()> {
     // 2. Check and apply patch if needed
     check_and_patch_create_ap();
 
-    // 3. Cleanup leftover interfaces
+    // 3. Cleanup leftover interfaces & stale processes
     cleanup_virtual_interfaces();
+    cleanup_stale_processes();
 
     // 4. Detect network interfaces
     let interfaces = get_network_interfaces();
@@ -173,8 +174,9 @@ fn main() -> io::Result<()> {
     // Wait a brief moment to allow create_ap's internal cleanup script to finish running
     thread::sleep(Duration::from_millis(800));
 
-    // Cleanup virtual interfaces
+    // Cleanup virtual interfaces & stale processes
     cleanup_virtual_interfaces();
+    cleanup_stale_processes();
 
     // Terminate any leftover imv windows
     let _ = Command::new("pkill").arg("imv").status();
@@ -434,4 +436,11 @@ fn print_logo() {
     println!("|_| |_|\\___/ \\__|___/ .__/ \\__,_|                    ");
     println!("                    |_|                              ");
     println!("\x1b[0m");
+}
+
+fn cleanup_stale_processes() {
+    println!("Cleaning up leftover dnsmasq processes from previous runs...");
+    let _ = Command::new("sudo")
+        .args(&["pkill", "-f", "dnsmasq -C /tmp/create_ap"])
+        .status();
 }
