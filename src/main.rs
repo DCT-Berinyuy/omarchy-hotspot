@@ -7,10 +7,9 @@ use std::thread;
 use std::time::Duration;
 use dialoguer::{theme::ColorfulTheme, Input, Select};
 use qrcode::QrCode;
-use qrcode::render::unicode;
 
 fn main() -> io::Result<()> {
-    println!("🚀 Starting Omarchy Hotspot Setup Manager...\n");
+    println!("Starting Omarchy Hotspot Setup Manager...\n");
 
     // 1. Check required dependencies
     check_dependencies();
@@ -18,13 +17,13 @@ fn main() -> io::Result<()> {
     // 2. Check and apply patch if needed
     check_and_patch_create_ap();
 
-    // 2. Cleanup leftover interfaces
+    // 3. Cleanup leftover interfaces
     cleanup_virtual_interfaces();
 
-    // 3. Detect network interfaces
+    // 4. Detect network interfaces
     let interfaces = get_network_interfaces();
     if interfaces.is_empty() {
-        eprintln!("❌ No network interfaces found!");
+        eprintln!("Error: No network interfaces found!");
         return Ok(());
     }
 
@@ -35,12 +34,12 @@ fn main() -> io::Result<()> {
         .cloned()
         .unwrap_or_else(|| "wlan0".to_string());
 
-    println!("🔍 Detected network interfaces: {:?}", interfaces);
-    println!("💡 Suggested Internet Source: {}", default_internet);
-    println!("💡 Suggested Wi-Fi Adapter: {}", default_wifi);
+    println!("Detected network interfaces: {:?}", interfaces);
+    println!("Suggested Internet Source: {}", default_internet);
+    println!("Suggested Wi-Fi Adapter: {}", default_wifi);
     println!();
 
-    // 4. Interactive prompts using dialoguer
+    // 5. Interactive prompts using dialoguer
     let theme = ColorfulTheme::default();
     
     let ssid: String = Input::with_theme(&theme)
@@ -76,22 +75,22 @@ fn main() -> io::Result<()> {
         .interact()?;
     let wifi_iface = &interfaces[wifi_index];
 
-    println!("\n🌐 Configuration Summary:");
+    println!("\nConfiguration Summary:");
     println!("   SSID:      {}", ssid);
     println!("   Password:  {}", password);
-    println!("   Sharing:   {} ➔ {}", internet_iface, wifi_iface);
+    println!("   Sharing:   {} -> {}", internet_iface, wifi_iface);
     println!();
 
-    // 5. Setup exit signal handling
+    // 6. Setup exit signal handling
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
     ctrlc::set_handler(move || {
-        println!("\n🛑 Received exit signal! Initiating shutdown...");
+        println!("\nReceived exit signal! Initiating shutdown...");
         r.store(false, Ordering::SeqCst);
     }).expect("Error setting Ctrl-C handler");
 
-    // 6. Spawn create_ap process
-    println!("⚡ Starting create_ap...");
+    // 7. Spawn create_ap process
+    println!("Starting create_ap...");
     let mut child = Command::new("sudo")
         .args(&[
             "create_ap",
@@ -145,14 +144,14 @@ fn main() -> io::Result<()> {
     // Main loop: Wait until exit signal
     while running.load(Ordering::SeqCst) {
         if let Ok(Some(_)) = child.try_wait() {
-            println!("❌ create_ap terminated unexpectedly.");
+            println!("Error: create_ap terminated unexpectedly.");
             break;
         }
         thread::sleep(Duration::from_millis(200));
     }
 
-    // 7. Cleanup on exit
-    println!("🔌 Stopping create_ap process group...");
+    // 8. Cleanup on exit
+    println!("Stopping create_ap process group...");
     
     // Kill sudo create_ap using sudo kill to ensure root process is terminated
     let _ = Command::new("sudo")
@@ -167,7 +166,7 @@ fn main() -> io::Result<()> {
     let _ = stderr_handle.join();
 
     cleanup_virtual_interfaces();
-    println!("✅ Hotspot stopped and cleaned up successfully.");
+    println!("Success: Hotspot stopped and cleaned up successfully.");
 
     Ok(())
 }
@@ -203,7 +202,7 @@ fn detect_default_gateway_interface() -> Option<String> {
 }
 
 fn cleanup_virtual_interfaces() {
-    println!("🧹 Cleaning up leftover virtual AP interfaces...");
+    println!("Cleaning up leftover virtual AP interfaces...");
     let interfaces = get_network_interfaces();
     for iface in interfaces {
         if iface.starts_with("ap") {
@@ -218,14 +217,14 @@ fn cleanup_virtual_interfaces() {
 fn check_and_patch_create_ap() {
     if let Ok(content) = fs::read_to_string("/usr/bin/create_ap") {
         if !content.contains("cut -d. -f1") {
-            println!("⚠️ Legacy create_ap bug detected (frequency decimal parsing).");
+            println!("Warning: Legacy create_ap bug detected (frequency decimal parsing).");
             print!("Do you want to patch /usr/bin/create_ap automatically? [Y/n]: ");
             let _ = io::stdout().flush();
             let mut input = String::new();
             if io::stdin().read_line(&mut input).is_ok() {
                 let input = input.trim().to_lowercase();
                 if input == "y" || input.is_empty() {
-                    println!("🔧 Patching /usr/bin/create_ap...");
+                    println!("Patching /usr/bin/create_ap...");
                     
                     // Apply decimal fix
                     let _ = Command::new("sudo")
@@ -237,7 +236,7 @@ fn check_and_patch_create_ap() {
                         .args(&["sed", "-i", "s/can_transmit_to_channel() {/can_transmit_to_channel() {\\n    return 0/g", "/usr/bin/create_ap"])
                         .status();
 
-                    println!("✅ Patches applied successfully!");
+                    println!("Success: Patches applied successfully!");
                 }
             }
         }
@@ -250,21 +249,45 @@ fn show_dashboard(ssid: &str, password: &str) {
     let _ = io::stdout().flush();
 
     println!("========================================================");
-    println!("🎉          DCT OMARCHY HOTSPOT IS ACTIVE              🎉");
+    println!("          DCT OMARCHY HOTSPOT IS ACTIVE                 ");
     println!("========================================================");
     println!();
     println!("   SSID (Name):   \x1b[1;32m{}\x1b[0m", ssid);
     println!("   Password:      \x1b[1;32m{}\x1b[0m", password);
     println!();
-    println!("📲 Scan the QR Code below to connect automatically:");
+    println!("Scan the QR Code below to connect automatically:");
     println!();
 
-    let wifi_str = format!("WIFI:S:{};T:WPA;P:{};;", ssid, password);
+    // Standard format: WIFI:T:WPA;S:SSID;P:PASSWORD;;
+    let wifi_str = format!("WIFI:T:WPA;S:{};P:{};;", ssid, password);
     if let Ok(code) = QrCode::new(wifi_str.as_bytes()) {
-        let image = code.render::<unicode::Dense1x2>()
-            .quiet_zone(true)
-            .build();
-        println!("{}", image);
+        let width = code.width();
+        let quiet_zone = 2;
+
+        // Render QR Code in terminal with correct black-on-white polarity for dark terminals
+        // Top quiet zone
+        for _ in 0..quiet_zone {
+            println!("{}", "██".repeat(width + quiet_zone * 2));
+        }
+
+        for y in 0..width {
+            // Left quiet zone
+            print!("{}", "██".repeat(quiet_zone));
+            for x in 0..width {
+                if code[(x, y)] == qrcode::Color::Dark {
+                    print!("  "); // Black data block (uses terminal background)
+                } else {
+                    print!("██"); // White background block (uses terminal foreground)
+                }
+            }
+            // Right quiet zone
+            println!("{}", "██".repeat(quiet_zone));
+        }
+
+        // Bottom quiet zone
+        for _ in 0..quiet_zone {
+            println!("{}", "██".repeat(width + quiet_zone * 2));
+        }
     }
     println!();
     println!("========================================================");
@@ -273,7 +296,7 @@ fn show_dashboard(ssid: &str, password: &str) {
 }
 
 fn check_dependencies() {
-    println!("🩺 Running Dependency Doctor...");
+    println!("Running Dependency Doctor...");
     let dependencies = vec![
         ("create_ap", "create_ap"),
         ("hostapd", "hostapd"),
@@ -297,31 +320,31 @@ fn check_dependencies() {
     }
 
     if !missing.is_empty() {
-        println!("⚠️ Missing required dependencies: {:?}", missing);
+        println!("Warning: Missing required dependencies: {:?}", missing);
         print!("Would you like to install them via pacman? [Y/n]: ");
         let _ = io::stdout().flush();
         let mut input = String::new();
         if io::stdin().read_line(&mut input).is_ok() {
             let input = input.trim().to_lowercase();
             if input == "y" || input.is_empty() {
-                println!("🔧 Installing dependencies...");
+                println!("Installing dependencies...");
                 let mut args = vec!["pacman", "-S", "--noconfirm"];
                 args.extend(&missing);
                 let status = Command::new("sudo").args(&args).status();
                 match status {
-                    Ok(s) if s.success() => println!("✅ Dependencies installed successfully!"),
+                    Ok(s) if s.success() => println!("Success: Dependencies installed successfully!"),
                     _ => {
-                        eprintln!("❌ Failed to install dependencies automatically.");
+                        eprintln!("Error: Failed to install dependencies automatically.");
                         eprintln!("   Please run: sudo pacman -S {}", missing.join(" "));
                         std::process::exit(1);
                     }
                 }
             } else {
-                println!("❌ Dependencies are missing. The hotspot manager cannot run without them.");
+                println!("Error: Dependencies are missing. The hotspot manager cannot run without them.");
                 std::process::exit(1);
             }
         }
     } else {
-        println!("✅ All dependencies are installed.");
+        println!("Success: All dependencies are installed.");
     }
 }
