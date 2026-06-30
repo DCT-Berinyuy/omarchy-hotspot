@@ -12,7 +12,10 @@ use qrcode::render::unicode;
 fn main() -> io::Result<()> {
     println!("🚀 Starting Omarchy Hotspot Setup Manager...\n");
 
-    // 1. Check and apply patch if needed
+    // 1. Check required dependencies
+    check_dependencies();
+
+    // 2. Check and apply patch if needed
     check_and_patch_create_ap();
 
     // 2. Cleanup leftover interfaces
@@ -267,4 +270,58 @@ fn show_dashboard(ssid: &str, password: &str) {
     println!("========================================================");
     println!("Press Ctrl+C at any time to stop the hotspot.");
     println!("========================================================");
+}
+
+fn check_dependencies() {
+    println!("🩺 Running Dependency Doctor...");
+    let dependencies = vec![
+        ("create_ap", "create_ap"),
+        ("hostapd", "hostapd"),
+        ("dnsmasq", "dnsmasq"),
+    ];
+
+    let mut missing = Vec::new();
+    for (name, bin) in &dependencies {
+        let status = Command::new("which")
+            .arg(bin)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let is_missing = match status {
+            Ok(s) => !s.success(),
+            Err(_) => true,
+        };
+        if is_missing {
+            missing.push(*name);
+        }
+    }
+
+    if !missing.is_empty() {
+        println!("⚠️ Missing required dependencies: {:?}", missing);
+        print!("Would you like to install them via pacman? [Y/n]: ");
+        let _ = io::stdout().flush();
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_ok() {
+            let input = input.trim().to_lowercase();
+            if input == "y" || input.is_empty() {
+                println!("🔧 Installing dependencies...");
+                let mut args = vec!["pacman", "-S", "--noconfirm"];
+                args.extend(&missing);
+                let status = Command::new("sudo").args(&args).status();
+                match status {
+                    Ok(s) if s.success() => println!("✅ Dependencies installed successfully!"),
+                    _ => {
+                        eprintln!("❌ Failed to install dependencies automatically.");
+                        eprintln!("   Please run: sudo pacman -S {}", missing.join(" "));
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                println!("❌ Dependencies are missing. The hotspot manager cannot run without them.");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        println!("✅ All dependencies are installed.");
+    }
 }
