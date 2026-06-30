@@ -10,6 +10,7 @@ use std::thread;
 use std::time::Duration;
 
 fn main() -> io::Result<()> {
+    print_logo();
     println!("Starting Omarchy Hotspot Setup Manager...\n");
 
     // 1. Check required dependencies
@@ -284,8 +285,9 @@ fn show_dashboard(ssid: &str, password: &str) {
     print!("{}[2J{}[1;1H", 27 as char, 27 as char);
     let _ = io::stdout().flush();
 
+    print_logo();
     println!("========================================================");
-    println!("          DCT OMARCHY HOTSPOT IS ACTIVE                 ");
+    println!("          HOTSPOT IS NOW ACTIVE                         ");
     println!("========================================================");
     println!();
     println!("   SSID (Name):   \x1b[1;32m{}\x1b[0m", ssid);
@@ -415,4 +417,21 @@ fn check_dependencies() {
     } else {
         println!("Success: All dependencies are installed.");
     }
+}
+
+fn print_logo() {
+    println!("\x1b[1;32m");
+    println!("  ____                               _               ");
+    println!(" / __ \\ _ __ ___   __ _ _ __ ___ ___| |__  _   _     ");
+    println!("/ / _` | '_ ` _ \\ / _` | '__/ __/ __| '_ \\| | | |    ");
+    println!("| |(_| | | | | | | (_| | | | (__\\__ \\ | | | |_| |    ");
+    println!("\\ \\__,_|_| |_| |_|\\__,_|_|  \\___|___/_| |_|\\__, |    ");
+    println!(" \\____/                                    |___/     ");
+    println!(" _   _       _                 _                     ");
+    println!("| | | | ___ | |_ ___ _ __   __| |                    ");
+    println!("| |_| |/ _ \\| __/ __| '_ \\ / _` |                    ");
+    println!("|  _  | (_) | |_\\__ \\ |_) | (_| |                    ");
+    println!("|_| |_|\\___/ \\__|___/ .__/ \\__,_|                    ");
+    println!("                    |_|                              ");
+    println!("\x1b[0m");
 }
