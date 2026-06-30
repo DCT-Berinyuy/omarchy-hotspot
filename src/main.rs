@@ -264,29 +264,47 @@ fn show_dashboard(ssid: &str, password: &str) {
         let width = code.width();
         let quiet_zone = 2;
 
-        // Render QR Code in terminal with correct black-on-white polarity for dark terminals
+        // ANSI background color codes:
+        // \x1b[47m = White background
+        // \x1b[40m = Black background
+        // \x1b[0m  = Reset formatting
+        let white_block = "\x1b[47m  ";
+        let black_block = "\x1b[40m  ";
+        let reset_color = "\x1b[0m";
+
         // Top quiet zone
         for _ in 0..quiet_zone {
-            println!("{}", "██".repeat(width + quiet_zone * 2));
+            for _ in 0..(width + quiet_zone * 2) {
+                print!("{}", white_block);
+            }
+            println!("{}", reset_color);
         }
 
         for y in 0..width {
             // Left quiet zone
-            print!("{}", "██".repeat(quiet_zone));
+            for _ in 0..quiet_zone {
+                print!("{}", white_block);
+            }
             for x in 0..width {
                 if code[(x, y)] == qrcode::Color::Dark {
-                    print!("  "); // Black data block (uses terminal background)
+                    print!("{}", black_block); // Black data block (using background escape code)
                 } else {
-                    print!("██"); // White background block (uses terminal foreground)
+                    print!("{}", white_block); // White background block (using background escape code)
                 }
             }
             // Right quiet zone
-            println!("{}", "██".repeat(quiet_zone));
+            for _ in 0..quiet_zone {
+                print!("{}", white_block);
+            }
+            println!("{}", reset_color);
         }
 
         // Bottom quiet zone
         for _ in 0..quiet_zone {
-            println!("{}", "██".repeat(width + quiet_zone * 2));
+            for _ in 0..(width + quiet_zone * 2) {
+                print!("{}", white_block);
+            }
+            println!("{}", reset_color);
         }
     }
     println!();
