@@ -412,51 +412,40 @@ fn show_dashboard(ssid: &str, password: &str) {
 
 fn check_dependencies() {
     println!("Running Dependency Doctor...");
-    let dependencies = vec![
-        ("create_ap", "create_ap"),
-        ("hostapd", "hostapd"),
-        ("dnsmasq", "dnsmasq"),
-        ("imv", "imv"),
-    ];
+    let repo_deps = ["hostapd", "dnsmasq", "imv"];
+    let aur_deps = ["create_ap"];
 
-    let mut missing = Vec::new();
-    for (name, bin) in &dependencies {
-        let status = Command::new("which")
-            .arg(bin)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        let is_missing = match status {
-            Ok(s) => !s.success(),
-            Err(_) => true,
-        };
-        if is_missing {
-            missing.push(*name);
+    let mut missing_repo: Vec<&str> = Vec::new();
+    for dep in &repo_deps {
+        if is_dependency_missing(dep) {
+            missing_repo.push(dep);
         }
     }
 
-    if !missing.is_empty() {
-        println!("Warning: Missing required dependencies: {:?}", missing);
-        print!("Would you like to install them via pacman? [Y/n]: ");
+    let mut missing_aur: Vec<&str> = Vec::new();
+    for dep in &aur_deps {
+        if is_dependency_missing(dep) {
+            missing_aur.push(dep);
+        }
+    }
+
+    if !missing_repo.is_empty() || !missing_aur.is_empty() {
+        let mut all_missing = missing_repo.clone();
+        all_missing.extend_from_slice(&missing_aur);
+        println!("Warning: Missing required dependencies: {:?}", all_missing);
+        print!("Would you like to install them? [Y/n]: ");
         let _ = io::stdout().flush();
         let mut input = String::new();
         if io::stdin().read_line(&mut input).is_ok() {
             let input = input.trim().to_lowercase();
             if input == "y" || input.is_empty() {
-                println!("Installing dependencies...");
-                let mut args = vec!["pacman", "-S", "--noconfirm"];
-                args.extend(&missing);
-                let status = Command::new("sudo").args(&args).status();
-                match status {
-                    Ok(s) if s.success() => {
-                        println!("Success: Dependencies installed successfully!")
-                    }
-                    _ => {
-                        eprintln!("Error: Failed to install dependencies automatically.");
-                        eprintln!("   Please run: sudo pacman -S {}", missing.join(" "));
-                        std::process::exit(1);
-                    }
+                if !missing_repo.is_empty() {
+                    install_repo_dependencies(&missing_repo);
                 }
+                if !missing_aur.is_empty() {
+                    install_aur_dependencies(&missing_aur);
+                }
+                println!("Success: Dependencies installed successfully!");
             } else {
                 println!(
                     "Error: Dependencies are missing. The hotspot manager cannot run without them."
@@ -467,6 +456,65 @@ fn check_dependencies() {
     } else {
         println!("Success: All dependencies are installed.");
     }
+}
+
+fn is_dependency_missing(name: &str) -> bool {
+    match Command::new("which")
+        .arg(name)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(s) => !s.success(),
+        Err(_) => true,
+    }
+}
+
+fn install_repo_dependencies(missing: &[&str]) {
+    println!("Installing repository packages via omarchy pkg add...");
+    let status = Command::new("omarchy")
+        .args(&["pkg", "add"])
+        .args(missing)
+        .status();
+    if let Ok(s) = status {
+        if s.success() {
+            return;
+        }
+    }
+    eprintln!("Error: Failed to install repository packages automatically.");
+    eprintln!("   Please run: omarchy pkg add {}", missing.join(" "));
+    std::process::exit(1);
+}
+
+fn install_aur_dependencies(missing: &[&str]) {
+    println!("Checking AUR availability...");
+    let aur_ok = Command::new("omarchy")
+        .args(&["pkg", "aur", "accessible"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !aur_ok {
+        eprintln!("Error: AUR is unreachable. Cannot install AUR packages: {:?}", missing);
+        eprintln!(
+            "   Please run once the AUR is reachable: omarchy pkg aur add {}",
+            missing.join(" ")
+        );
+        std::process::exit(1);
+    }
+
+    println!("Installing AUR packages via omarchy pkg aur add...");
+    let status = Command::new("omarchy")
+        .args(&["pkg", "aur", "add"])
+        .args(missing)
+        .status();
+    if let Ok(s) = status {
+        if s.success() {
+            return;
+        }
+    }
+    eprintln!("Error: Failed to install AUR packages automatically.");
+    eprintln!("   Please run: omarchy pkg aur add {}", missing.join(" "));
+    std::process::exit(1);
 }
 
 fn print_logo() {
