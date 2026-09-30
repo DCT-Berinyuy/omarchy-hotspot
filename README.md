@@ -78,6 +78,14 @@ sudo omarchy-hotspot
 
 ## 🔍 Troubleshooting
 
+### Sharing a wired (Ethernet) connection
+Plug in your Ethernet cable, run `sudo omarchy-hotspot`, and select:
+
+*   **Interface providing internet:** your Ethernet interface (e.g. `enp0s31f6`). It is pre-selected when it holds the default route.
+*   **Wi-Fi adapter to broadcast the hotspot:** your wireless card (e.g. `wlp4s0`). Only real wireless adapters are listed here, detected via `/sys/class/net/<iface>/wireless`, so predictable names like `wlp4s0` work.
+
+Your Wi-Fi card does not need to be connected to any network; it only acts as the transmitter.
+
 ### Card limit exhausted
 If you encounter `RTNETLINK answers: Device or resource busy`, the program will attempt to auto-clean old virtual interfaces. If it persists, you can manually run:
 ```bash
