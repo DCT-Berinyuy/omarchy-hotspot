@@ -3,6 +3,7 @@ use image::Luma;
 use qrcode::QrCode;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,17 +31,26 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    let default_internet =
-        detect_default_gateway_interface().unwrap_or_else(|| "wlan0".to_string());
-    let default_wifi = interfaces
-        .iter()
-        .find(|iface| iface.starts_with("wlan"))
-        .cloned()
-        .unwrap_or_else(|| "wlan0".to_string());
+    let wireless_interfaces = get_wireless_interfaces(Path::new(SYS_CLASS_NET), &interfaces);
+    if wireless_interfaces.is_empty() {
+        eprintln!(
+            "Error: No Wi-Fi adapter found! A wireless card is required to broadcast a hotspot."
+        );
+        return Ok(());
+    }
+
+    let default_internet = detect_default_gateway_interface();
+    let default_wifi = &wireless_interfaces[0];
 
     println!("Detected network interfaces: {:?}", interfaces);
-    println!("Suggested Internet Source: {}", default_internet);
-    println!("Suggested Wi-Fi Adapter: {}", default_wifi);
+    println!("Detected Wi-Fi adapters:     {:?}", wireless_interfaces);
+    println!(
+        "Suggested Internet Source:   {}",
+        default_internet
+            .as_deref()
+            .unwrap_or("(no default route found)")
+    );
+    println!("Suggested Wi-Fi Adapter:     {}", default_wifi);
     println!();
 
     // 5. Interactive prompts using dialoguer
@@ -68,31 +78,35 @@ fn main() -> io::Result<()> {
         .with_prompt("Select interface providing internet")
         .items(&interfaces)
         .default(
-            interfaces
-                .iter()
-                .position(|x| *x == default_internet)
+            default_internet
+                .as_ref()
+                .and_then(|d| interfaces.iter().position(|x| x == d))
                 .unwrap_or(0),
         )
         .interact()?;
     let internet_iface = &interfaces[internet_index];
 
-    // Select wifi interface
+    // Only wireless adapters can broadcast a hotspot
     let wifi_index = Select::with_theme(&theme)
-        .with_prompt("Select Wi-Fi interface to host hotspot")
-        .items(&interfaces)
-        .default(
-            interfaces
-                .iter()
-                .position(|x| *x == default_wifi)
-                .unwrap_or(0),
-        )
+        .with_prompt("Select Wi-Fi adapter to broadcast the hotspot")
+        .items(&wireless_interfaces)
+        .default(0)
         .interact()?;
-    let wifi_iface = &interfaces[wifi_index];
+    let wifi_iface = &wireless_interfaces[wifi_index];
+
+    let mode = if internet_iface == wifi_iface {
+        "Wi-Fi repeater (virtual AP on the same card)"
+    } else if wireless_interfaces.contains(internet_iface) {
+        "Wi-Fi -> Wi-Fi"
+    } else {
+        "Wired (Ethernet) -> Wi-Fi"
+    };
 
     println!("\nConfiguration Summary:");
     println!("   SSID:      {}", ssid);
     println!("   Password:  {}", password);
     println!("   Sharing:   {} -> {}", internet_iface, wifi_iface);
+    println!("   Mode:      {}", mode);
     println!();
 
     // 6. Setup exit signal handling
@@ -189,9 +203,11 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
+const SYS_CLASS_NET: &str = "/sys/class/net";
+
 fn get_network_interfaces() -> Vec<String> {
     let mut interfaces = Vec::new();
-    if let Ok(entries) = fs::read_dir("/sys/class/net") {
+    if let Ok(entries) = fs::read_dir(SYS_CLASS_NET) {
         for entry in entries {
             if let Ok(entry) = entry {
                 if let Some(name) = entry.file_name().to_str() {
@@ -207,16 +223,33 @@ fn get_network_interfaces() -> Vec<String> {
     interfaces
 }
 
+/// A kernel network interface is wireless if sysfs exposes a `wireless`
+/// directory or a `phy80211` link for it, regardless of its name
+/// (`wlan0`, `wlp4s0`, `wlx...`).
+fn is_wireless_interface(net_dir: &Path, iface: &str) -> bool {
+    let dir = net_dir.join(iface);
+    dir.join("wireless").exists() || dir.join("phy80211").exists()
+}
+
+fn get_wireless_interfaces(net_dir: &Path, interfaces: &[String]) -> Vec<String> {
+    interfaces
+        .iter()
+        .filter(|iface| !iface.starts_with("ap") && is_wireless_interface(net_dir, iface))
+        .cloned()
+        .collect()
+}
+
 fn detect_default_gateway_interface() -> Option<String> {
-    if let Ok(content) = fs::read_to_string("/proc/net/route") {
-        for line in content.lines().skip(1) {
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            if fields.len() >= 2 && fields[1] == "00000000" {
-                return Some(fields[0].to_string());
-            }
-        }
-    }
-    None
+    fs::read_to_string("/proc/net/route")
+        .ok()
+        .and_then(|content| parse_default_route(&content))
+}
+
+fn parse_default_route(route_table: &str) -> Option<String> {
+    route_table.lines().skip(1).find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        (fields.len() >= 2 && fields[1] == "00000000").then(|| fields[0].to_string())
+    })
 }
 
 fn cleanup_virtual_interfaces() {
@@ -266,8 +299,23 @@ fn check_and_patch_create_ap() {
     }
 }
 
+/// Builds a `WIFI:` QR payload, escaping characters that are reserved by the
+/// format (`\`, `;`, `,`, `:`, `"`) so phones parse the SSID/password correctly.
+fn wifi_qr_payload(ssid: &str, password: &str) -> String {
+    fn escape(value: &str) -> String {
+        value
+            .chars()
+            .flat_map(|c| match c {
+                '\\' | ';' | ',' | ':' | '"' => vec!['\\', c],
+                _ => vec![c],
+            })
+            .collect()
+    }
+    format!("WIFI:T:WPA;S:{};P:{};;", escape(ssid), escape(password))
+}
+
 fn save_qr_code_png(ssid: &str, password: &str) -> Option<String> {
-    let wifi_str = format!("WIFI:T:WPA;S:{};P:{};;", ssid, password);
+    let wifi_str = wifi_qr_payload(ssid, password);
     if let Ok(code) = QrCode::new(wifi_str.as_bytes()) {
         let image = code
             .render::<Luma<u8>>()
@@ -312,7 +360,7 @@ fn show_dashboard(ssid: &str, password: &str) {
     println!();
 
     // 2. Terminal Fallback QR Code
-    let wifi_str = format!("WIFI:T:WPA;S:{};P:{};;", ssid, password);
+    let wifi_str = wifi_qr_payload(ssid, password);
     if let Ok(code) = QrCode::new(wifi_str.as_bytes()) {
         let width = code.width();
         let quiet_zone = 2;
@@ -443,4 +491,73 @@ fn cleanup_stale_processes() {
     let _ = Command::new("sudo")
         .args(&["pkill", "-f", "dnsmasq -C /tmp/create_ap"])
         .status();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn fake_sysfs(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "omarchy-hotspot-test-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("enp0s31f6")).unwrap();
+        fs::create_dir_all(root.join("wlp4s0/wireless")).unwrap();
+        fs::create_dir_all(root.join("wlan1/phy80211")).unwrap();
+        fs::create_dir_all(root.join("ap0/wireless")).unwrap();
+        root
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn detects_wireless_adapters_by_sysfs_not_by_name() {
+        let root = fake_sysfs("detect");
+        let all = names(&["ap0", "enp0s31f6", "wlan1", "wlp4s0"]);
+
+        let wireless = get_wireless_interfaces(&root, &all);
+
+        assert_eq!(wireless, names(&["wlan1", "wlp4s0"]));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ethernet_is_never_offered_as_hotspot_adapter() {
+        let root = fake_sysfs("ethernet");
+        assert!(!is_wireless_interface(&root, "enp0s31f6"));
+        assert!(is_wireless_interface(&root, "wlp4s0"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parses_default_route_interface() {
+        let table = "Iface\tDestination\tGateway\n\
+                     wlp4s0\t0010A8C0\t00000000\n\
+                     enp0s31f6\t00000000\t010CA8C0\n";
+        assert_eq!(parse_default_route(table), Some("enp0s31f6".to_string()));
+    }
+
+    #[test]
+    fn returns_none_without_default_route() {
+        let table = "Iface\tDestination\tGateway\nwlp4s0\t0010A8C0\t00000000\n";
+        assert_eq!(parse_default_route(table), None);
+    }
+
+    #[test]
+    fn escapes_reserved_characters_in_qr_payload() {
+        assert_eq!(
+            wifi_qr_payload("DCT_Linux", "Tryhackm3;"),
+            "WIFI:T:WPA;S:DCT_Linux;P:Tryhackm3\\;;;"
+        );
+        assert_eq!(
+            wifi_qr_payload("a:b,c", "p\\\"w"),
+            "WIFI:T:WPA;S:a\\:b\\,c;P:p\\\\\\\"w;;"
+        );
+    }
 }
