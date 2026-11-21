@@ -14,11 +14,11 @@ An interactive, terminal-based Wi-Fi hotspot manager built in Rust, tailored for
 ## Features
 
 *   **Dependency Doctor:** Validates system requirements (`create_ap`, `hostapd`, `dnsmasq`) at startup and offers to auto-install missing packages using `pacman`.
-*   **Auto-Cleanup Daemon:** Detects and deletes orphaned virtual interfaces (like `ap0`, `ap1`, `ap2`) left by failed or interrupted hotspot sessions, avoiding `Device or resource busy` errors.
+*   **Auto-Cleanup Daemon:** Detects and deletes orphaned virtual interfaces (like `ap0`, `ap1`, `ap2`) left by failed or interrupted hotspot sessions, avoiding `Device or resource busy` errors. Interfaces and processes belonging to other running `create_ap` sessions are left alone.
 *   **Legacy Bug Patcher:** Auto-detects legacy decimal-point parsing bugs in `/usr/bin/create_ap` and applies system patches automatically.
-*   **Interactive Setup Wizard:** Guided terminal UI prompts to set SSID, WPA2 password, and interface routing (e.g. sharing Wi-Fi connection over a virtual AP on the same card).
+*   **Interactive Setup Wizard:** Guided terminal UI prompts to set SSID, WPA2 password (a fresh random one is suggested each run), and interface routing (e.g. sharing Wi-Fi connection over a virtual AP on the same card). The password is passed to `create_ap` over stdin, never on the command line, and the QR image is kept in a private temporary directory that is deleted on exit.
 *   **ANSI QR Code Dashboard:** Generates a compact QR code in the terminal. Scan it with a mobile camera to connect instantly without typing passwords.
-*   **Safe Signal Cleanup:** Handles termination signals (`Ctrl+C`) to cleanly stop the hotspot and delete virtual interfaces from your wireless card.
+*   **Safe Signal Cleanup:** Handles termination signals (`Ctrl+C`) to cleanly stop the hotspot it started (waiting for `create_ap`'s own cleanup) and delete virtual interfaces from your wireless card.
 
 ---
 

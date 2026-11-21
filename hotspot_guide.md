@@ -43,8 +43,10 @@ for dev in ap0 ap1 ap2 ap3; do sudo iw dev $dev del 2>/dev/null || true; done
 Run `create_ap` to share your active Wi-Fi internet (`wlan0` to `wlan0`):
 
 ```bash
-sudo create_ap wlan0 wlan0 DCT_Linux Tryh4ckm3
+sudo create_ap wlan0 wlan0
 ```
+
+`create_ap` then prompts for the SSID and passphrase. Avoid passing the passphrase as a command-line argument: other local users can read it from the process list (`ps`).
 
 > [!IMPORTANT]
 > Keep this terminal window open. If you close the terminal or press `Ctrl + C`, the hotspot will turn off.
@@ -58,6 +60,6 @@ sudo create_ap wlan0 wlan0 DCT_Linux Tryh4ckm3
 | **Check active interfaces** | `iw dev` |
 | **Check Wi-Fi status** | `nmcli device` |
 | **Clean up interfaces** | `for dev in ap0 ap1 ap2 ap3; do sudo iw dev $dev del 2>/dev/null \|\| true; done` |
-| **Re-run hotspot** | `sudo create_ap wlan0 wlan0 <SSID> <Password>` |
+| **Re-run hotspot** | `sudo create_ap wlan0 wlan0` (prompts for SSID and passphrase) |
 
 ***
