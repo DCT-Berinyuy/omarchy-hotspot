@@ -1,5 +1,6 @@
 mod create_ap;
 mod credentials;
+mod deps;
 mod run_dir;
 
 use dialoguer::{Input, Select, theme::ColorfulTheme};
@@ -19,17 +20,14 @@ fn main() -> io::Result<()> {
     print_logo();
     println!("Starting Omarchy Hotspot Setup Manager...\n");
 
-    // 1. Check required dependencies
-    check_dependencies();
+    // 1. Check required dependencies and which create_ap is installed
+    let create_ap_kind = deps::run_doctor();
 
-    // 2. Check and apply patch if needed
-    check_and_patch_create_ap();
-
-    // 3. Cleanup leftover interfaces & stale processes
+    // 2. Cleanup leftover interfaces & stale processes
     cleanup_virtual_interfaces();
     cleanup_stale_processes();
 
-    // 4. Detect network interfaces
+    // 3. Detect network interfaces
     let interfaces = get_network_interfaces();
     if interfaces.is_empty() {
         eprintln!("Error: No network interfaces found!");
@@ -58,7 +56,7 @@ fn main() -> io::Result<()> {
     println!("Suggested Wi-Fi Adapter:     {}", default_wifi);
     println!();
 
-    // 5. Interactive prompts using dialoguer
+    // 4. Interactive prompts using dialoguer
     let theme = ColorfulTheme::default();
 
     let ssid: String = Input::with_theme(&theme)
@@ -112,7 +110,7 @@ fn main() -> io::Result<()> {
     println!("   Mode:      {}", mode);
     println!();
 
-    // 6. Setup exit signal handling
+    // 5. Setup exit signal handling
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
     ctrlc::set_handler(move || {
@@ -130,7 +128,7 @@ fn main() -> io::Result<()> {
         }
     };
 
-    // 7. Spawn create_ap process. SSID and password go through stdin so the
+    // 6. Spawn create_ap process. SSID and password go through stdin so the
     // password never appears in the process list.
     println!("Starting create_ap...");
     let mut child = Command::new("sudo")
@@ -201,12 +199,19 @@ fn main() -> io::Result<()> {
     while running.load(Ordering::SeqCst) {
         if let Ok(Some(_)) = child.try_wait() {
             println!("Error: create_ap terminated unexpectedly.");
+            if matches!(
+                create_ap_kind,
+                deps::CreateApKind::Legacy { patched: false }
+            ) {
+                println!("   The original create_ap is the likely cause.");
+                deps::print_switch_hint();
+            }
             break;
         }
         thread::sleep(Duration::from_millis(200));
     }
 
-    // 8. Cleanup on exit: signal only our own create_ap instance and wait for
+    // 7. Cleanup on exit: signal only our own create_ap instance and wait for
     // its cleanup, leaving other hotspot sessions untouched.
     println!("Stopping create_ap...");
     let pid = match create_ap_pid.load(Ordering::SeqCst) {
@@ -297,40 +302,6 @@ fn cleanup_virtual_interfaces() {
         let _ = Command::new("sudo")
             .args(["iw", "dev", &iface, "del"])
             .status();
-    }
-}
-
-fn check_and_patch_create_ap() {
-    if let Ok(content) = fs::read_to_string("/usr/bin/create_ap")
-        && !content.contains("cut -d. -f1")
-    {
-        println!("Warning: Legacy create_ap bug detected (frequency decimal parsing).");
-        print!("Do you want to patch /usr/bin/create_ap automatically? [Y/n]: ");
-        let _ = io::stdout().flush();
-        let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_ok() {
-            let input = input.trim().to_lowercase();
-            if input == "y" || input.is_empty() {
-                println!("Patching /usr/bin/create_ap...");
-
-                // Apply decimal fix
-                let _ = Command::new("sudo")
-                    .args([
-                        "sed",
-                        "-i",
-                        "/WIFI_IFACE_FREQ=/s/awk '{print $2}'/awk '{print $2}' | cut -d. -f1/",
-                        "/usr/bin/create_ap",
-                    ])
-                    .status();
-
-                // Apply can_transmit_to_channel override
-                let _ = Command::new("sudo")
-                    .args(["sed", "-i", "s/can_transmit_to_channel() {/can_transmit_to_channel() {\\n    return 0/g", "/usr/bin/create_ap"])
-                    .status();
-
-                println!("Success: Patches applied successfully!");
-            }
-        }
     }
 }
 
@@ -448,65 +419,6 @@ fn show_dashboard(ssid: &str, password: &str, qr_dir: Option<&Path>) -> Option<C
     println!("Press Ctrl+C at any time to stop the hotspot.");
     println!("========================================================");
     viewer
-}
-
-fn check_dependencies() {
-    println!("Running Dependency Doctor...");
-    let dependencies = vec![
-        ("create_ap", "create_ap"),
-        ("hostapd", "hostapd"),
-        ("dnsmasq", "dnsmasq"),
-        ("imv", "imv"),
-    ];
-
-    let mut missing = Vec::new();
-    for (name, bin) in &dependencies {
-        let status = Command::new("which")
-            .arg(bin)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        let is_missing = match status {
-            Ok(s) => !s.success(),
-            Err(_) => true,
-        };
-        if is_missing {
-            missing.push(*name);
-        }
-    }
-
-    if !missing.is_empty() {
-        println!("Warning: Missing required dependencies: {:?}", missing);
-        print!("Would you like to install them via pacman? [Y/n]: ");
-        let _ = io::stdout().flush();
-        let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_ok() {
-            let input = input.trim().to_lowercase();
-            if input == "y" || input.is_empty() {
-                println!("Installing dependencies...");
-                let mut args = vec!["pacman", "-S", "--noconfirm"];
-                args.extend(&missing);
-                let status = Command::new("sudo").args(&args).status();
-                match status {
-                    Ok(s) if s.success() => {
-                        println!("Success: Dependencies installed successfully!")
-                    }
-                    _ => {
-                        eprintln!("Error: Failed to install dependencies automatically.");
-                        eprintln!("   Please run: sudo pacman -S {}", missing.join(" "));
-                        std::process::exit(1);
-                    }
-                }
-            } else {
-                println!(
-                    "Error: Dependencies are missing. The hotspot manager cannot run without them."
-                );
-                std::process::exit(1);
-            }
-        }
-    } else {
-        println!("Success: All dependencies are installed.");
-    }
 }
 
 fn print_logo() {
