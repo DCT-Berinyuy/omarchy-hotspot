@@ -588,6 +588,15 @@ mod tests {
     }
 
     #[test]
+    fn qr_code_is_saved_as_png() {
+        // Fails at runtime, not compile time, if the `png` image feature is dropped.
+        let dir = RunDir::create().unwrap();
+        let path = save_qr_code_png("DCT_Linux", "Tryhackm3;", dir.path())
+            .expect("QR code PNG should be written");
+        assert!(fs::read(path).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
     fn escapes_reserved_characters_in_qr_payload() {
         assert_eq!(
             wifi_qr_payload("DCT_Linux", "Tryhackm3;"),
