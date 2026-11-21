@@ -1,6 +1,6 @@
 [package]
 name = "omarchy-hotspot"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "Interactive terminal Wi-Fi hotspot manager for Arch Linux (Omarchy), built on create_ap"
 license = "MIT"
