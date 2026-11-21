@@ -20,7 +20,7 @@ An interactive, terminal-based Wi-Fi hotspot manager built in Rust, tailored for
 *   **Interactive Setup Wizard:** Guided terminal UI prompts to set SSID, WPA2 password (a fresh random one is suggested each run), and interface routing (e.g. sharing Wi-Fi connection over a virtual AP on the same card). The password is passed to `create_ap` over stdin, never on the command line, and the QR image is kept in a private temporary directory that is deleted on exit.
 *   **QR Code Dashboard:** Opens a high-contrast QR code in `imv`, with an ANSI QR code in the terminal as a fallback. Scan it with a phone camera to connect without typing the password.
 *   **Connected Devices:** While the hotspot runs, prints a line whenever a device joins or leaves, with its name and IP address and how many devices are connected.
-*   **Safe Signal Cleanup:** Handles termination signals (`Ctrl+C`) to cleanly stop the hotspot it started (waiting for `create_ap`'s own cleanup) and delete virtual interfaces from your wireless card.
+*   **Safe Signal Cleanup:** Cleanly stops the hotspot it started on `Ctrl+C`, when the terminal window is closed, or on `SIGTERM`, waiting for `create_ap`'s own cleanup and deleting virtual interfaces from your wireless card.
 
 ---
 
