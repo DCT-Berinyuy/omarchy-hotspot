@@ -56,15 +56,15 @@ sha256sum -c omarchy-hotspot.sha256
 # (releases v0.1.1 and later; needs the GitHub CLI)
 gh attestation verify omarchy-hotspot --repo DCT-Berinyuy/omarchy-hotspot
 
-# Make it executable
-chmod +x omarchy-hotspot
-
-# Install it globally
-sudo mv omarchy-hotspot /usr/local/bin/
+# Install it globally as a root-owned program, then delete the downloads
+sudo install -m 755 omarchy-hotspot /usr/local/bin/omarchy-hotspot
+rm omarchy-hotspot omarchy-hotspot.sha256
 
 # Start the hotspot manager from anywhere
 sudo omarchy-hotspot
 ```
+
+To update, run the same commands again.
 
 ### Build from Source
 If you prefer to build the program from source (requires Cargo/Rust):
@@ -83,12 +83,21 @@ To compile a release binary and install it globally:
 
 ```bash
 cargo build --release
-sudo cp target/release/omarchy-hotspot /usr/local/bin/
+sudo install -m 755 target/release/omarchy-hotspot /usr/local/bin/omarchy-hotspot
 ```
 
 Then you can launch the hotspot manager from anywhere by simply running:
 ```bash
 sudo omarchy-hotspot
+```
+
+To update, run `git pull`, then both commands again.
+
+`sudo install` writes a new, root-owned copy. Don't use `sudo mv` or `sudo cp`: `mv` keeps your user as the owner, and `cp` keeps an existing copy's owner, which lets anything running as your user replace a program you run as root. Rerunning the install command fixes a copy installed that way.
+
+### Uninstall
+```bash
+sudo rm /usr/local/bin/omarchy-hotspot
 ```
 
 ---
