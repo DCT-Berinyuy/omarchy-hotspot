@@ -4,6 +4,7 @@
 
 # omarchy-hotspot
 
+[![CI](https://github.com/DCT-Berinyuy/omarchy-hotspot/actions/workflows/ci.yml/badge.svg)](https://github.com/DCT-Berinyuy/omarchy-hotspot/actions/workflows/ci.yml)
 
 An interactive, terminal-based Wi-Fi hotspot manager built in Rust, tailored for Arch Linux configurations (like Omarchy) running minimalist Wayland compositors (like Hyprland).
 
@@ -13,12 +14,12 @@ An interactive, terminal-based Wi-Fi hotspot manager built in Rust, tailored for
 
 ## Features
 
-*   **Dependency Doctor:** Validates system requirements (`create_ap`, `hostapd`, `dnsmasq`) at startup and offers to auto-install missing packages using `pacman`.
-*   **Auto-Cleanup Daemon:** Detects and deletes orphaned virtual interfaces (like `ap0`, `ap1`, `ap2`) left by failed or interrupted hotspot sessions, avoiding `Device or resource busy` errors.
+*   **Dependency Doctor:** Validates system requirements (`create_ap`, `hostapd`, `dnsmasq`, `imv`) at startup and offers to auto-install missing packages using `pacman`.
+*   **Auto-Cleanup:** Detects and deletes orphaned virtual interfaces (like `ap0`, `ap1`, `ap2`) left by failed or interrupted hotspot sessions, avoiding `Device or resource busy` errors. Interfaces and processes belonging to other running `create_ap` sessions are left alone.
 *   **Legacy Bug Patcher:** Auto-detects legacy decimal-point parsing bugs in `/usr/bin/create_ap` and applies system patches automatically.
-*   **Interactive Setup Wizard:** Guided terminal UI prompts to set SSID, WPA2 password, and interface routing (e.g. sharing Wi-Fi connection over a virtual AP on the same card).
-*   **ANSI QR Code Dashboard:** Generates a compact QR code in the terminal. Scan it with a mobile camera to connect instantly without typing passwords.
-*   **Safe Signal Cleanup:** Handles termination signals (`Ctrl+C`) to cleanly stop the hotspot and delete virtual interfaces from your wireless card.
+*   **Interactive Setup Wizard:** Guided terminal UI prompts to set SSID, WPA2 password (a fresh random one is suggested each run), and interface routing (e.g. sharing Wi-Fi connection over a virtual AP on the same card). The password is passed to `create_ap` over stdin, never on the command line, and the QR image is kept in a private temporary directory that is deleted on exit.
+*   **QR Code Dashboard:** Opens a high-contrast QR code in `imv`, with an ANSI QR code in the terminal as a fallback. Scan it with a phone camera to connect without typing the password.
+*   **Safe Signal Cleanup:** Handles termination signals (`Ctrl+C`) to cleanly stop the hotspot it started (waiting for `create_ap`'s own cleanup) and delete virtual interfaces from your wireless card.
 
 ---
 
@@ -33,11 +34,19 @@ An interactive, terminal-based Wi-Fi hotspot manager built in Rust, tailored for
 ## 💻 Usage
 
 ### Quick Install (Precompiled Binary)
-If you do not have Rust or Cargo installed, you can download the precompiled binary directly from the [GitHub Releases](https://github.com/DCT-Berinyuy/omarchy-hotspot/releases) page:
+If you do not have Rust or Cargo installed, you can download the precompiled binary (under 1 MB) directly from the [GitHub Releases](https://github.com/DCT-Berinyuy/omarchy-hotspot/releases) page:
 
 ```bash
-# Download the latest binary
-curl -L -O https://github.com/DCT-Berinyuy/omarchy-hotspot/releases/download/v0.1.0/omarchy-hotspot
+# Download the latest binary and its checksum
+curl -fLO https://github.com/DCT-Berinyuy/omarchy-hotspot/releases/latest/download/omarchy-hotspot
+curl -fLO https://github.com/DCT-Berinyuy/omarchy-hotspot/releases/latest/download/omarchy-hotspot.sha256
+
+# Check the download is intact (prints "omarchy-hotspot: OK")
+sha256sum -c omarchy-hotspot.sha256
+
+# Optional: confirm this repository's GitHub Actions built it, since it runs as root
+# (releases v0.1.1 and later; needs the GitHub CLI)
+gh attestation verify omarchy-hotspot --repo DCT-Berinyuy/omarchy-hotspot
 
 # Make it executable
 chmod +x omarchy-hotspot
@@ -95,4 +104,4 @@ for dev in ap0 ap1 ap2 ap3; do sudo iw dev $dev del 2>/dev/null || true; done
 ---
 
 ## 📄 License
-This project is open-source and available under the MIT License.
+This project is open-source and available under the [MIT License](LICENSE).

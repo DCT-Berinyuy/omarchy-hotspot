@@ -1,12 +1,17 @@
+mod create_ap;
+mod credentials;
+mod run_dir;
+
 use dialoguer::{Input, Select, theme::ColorfulTheme};
 use image::Luma;
 use qrcode::QrCode;
+use run_dir::RunDir;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
-use std::path::Path;
-use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -59,19 +64,17 @@ fn main() -> io::Result<()> {
     let ssid: String = Input::with_theme(&theme)
         .with_prompt("Enter Hotspot SSID (Name)")
         .default("DCT_Linux".to_string())
+        .validate_with(|input: &String| credentials::validate_ssid(input))
         .interact_text()?;
 
-    let password: String = Input::with_theme(&theme)
-        .with_prompt("Enter Hotspot Password (min. 8 chars)")
-        .default("Tryh4ckm3;".to_string())
-        .validate_with(|input: &String| -> Result<(), &str> {
-            if input.len() >= 8 {
-                Ok(())
-            } else {
-                Err("Password must be at least 8 characters long")
-            }
-        })
-        .interact_text()?;
+    // Suggest a fresh random password each run instead of a fixed default.
+    let mut password_input = Input::<String>::with_theme(&theme)
+        .with_prompt("Enter Hotspot Password (8-63 chars)")
+        .validate_with(|input: &String| credentials::validate_password(input));
+    if let Some(generated) = credentials::generate_password() {
+        password_input = password_input.default(generated);
+    }
+    let password = password_input.interact_text()?;
 
     // Select internet interface
     let internet_index = Select::with_theme(&theme)
@@ -118,37 +121,68 @@ fn main() -> io::Result<()> {
     })
     .expect("Error setting Ctrl-C handler");
 
-    // 7. Spawn create_ap process
+    // Private directory for the QR code image, which embeds the password.
+    let run_dir = match RunDir::create() {
+        Ok(dir) => Some(dir),
+        Err(e) => {
+            eprintln!("Warning: cannot create a private temp directory ({e}); QR image disabled.");
+            None
+        }
+    };
+
+    // 7. Spawn create_ap process. SSID and password go through stdin so the
+    // password never appears in the process list.
     println!("Starting create_ap...");
     let mut child = Command::new("sudo")
-        .args(&["create_ap", wifi_iface, internet_iface, &ssid, &password])
+        .args(["create_ap", wifi_iface, internet_iface])
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
 
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(e) = stdin.write_all(create_ap::credentials_stdin(&ssid, &password).as_bytes())
+    {
+        eprintln!("Error: could not pass the SSID and password to create_ap: {e}");
+    }
+
     let child_stdout = child.stdout.take().expect("Failed to open stdout");
     let child_stderr = child.stderr.take().expect("Failed to open stderr");
+
+    let create_ap_pid = Arc::new(AtomicU32::new(0));
+    let qr_viewer: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
 
     // Thread to monitor stdout and show TUI when AP is enabled
     let ssid_clone = ssid.clone();
     let password_clone = password.clone();
     let running_clone = running.clone();
+    let pid_clone = create_ap_pid.clone();
+    let viewer_clone = qr_viewer.clone();
+    let qr_dir = run_dir.as_ref().map(|dir| dir.path().to_path_buf());
 
     thread::spawn(move || {
         let reader = BufReader::new(child_stdout);
         let mut ap_enabled = false;
 
         for line in reader.lines() {
+            // Keep draining after shutdown starts: closing the pipe early
+            // would kill create_ap with SIGPIPE before its cleanup runs.
             if !running_clone.load(Ordering::SeqCst) {
-                break;
+                continue;
             }
             if let Ok(line) = line {
                 if !ap_enabled {
                     println!("   [create_ap] {}", line);
                 }
+                if let Some(pid) = create_ap::parse_pid_line(&line) {
+                    pid_clone.store(pid, Ordering::SeqCst);
+                }
                 if line.contains("AP-ENABLED") {
                     ap_enabled = true;
-                    show_dashboard(&ssid_clone, &password_clone);
+                    let viewer = show_dashboard(&ssid_clone, &password_clone, qr_dir.as_deref());
+                    if let Ok(mut slot) = viewer_clone.lock() {
+                        *slot = viewer;
+                    }
                 }
             }
         }
@@ -158,9 +192,8 @@ fn main() -> io::Result<()> {
     thread::spawn(move || {
         let reader = BufReader::new(child_stderr);
         for line in reader.lines() {
-            if let Ok(line) = line {
-                eprintln!("   [create_ap error] {}", line);
-            }
+            let Ok(line) = line else { continue };
+            eprintln!("   [create_ap error] {}", line);
         }
     });
 
@@ -173,27 +206,25 @@ fn main() -> io::Result<()> {
         thread::sleep(Duration::from_millis(200));
     }
 
-    // 8. Cleanup on exit
-    println!("Stopping create_ap process group...");
-
-    // Kill the underlying create_ap processes cleanly using pkill
-    let _ = Command::new("sudo")
-        .args(&["pkill", "-SIGINT", "-f", "create_ap"])
-        .status();
-
-    // Kill the spawned sudo wrapper process
-    let _ = child.kill();
-    let _ = child.wait();
-
-    // Wait a brief moment to allow create_ap's internal cleanup script to finish running
-    thread::sleep(Duration::from_millis(800));
+    // 8. Cleanup on exit: signal only our own create_ap instance and wait for
+    // its cleanup, leaving other hotspot sessions untouched.
+    println!("Stopping create_ap...");
+    let pid = match create_ap_pid.load(Ordering::SeqCst) {
+        0 => None,
+        pid => Some(pid),
+    };
+    create_ap::stop(&mut child, pid);
 
     // Cleanup virtual interfaces & stale processes
     cleanup_virtual_interfaces();
     cleanup_stale_processes();
 
-    // Terminate any leftover imv windows
-    let _ = Command::new("pkill").arg("imv").status();
+    // Close only the QR viewer this run opened, then delete the QR image.
+    if let Some(mut viewer) = qr_viewer.lock().ok().and_then(|mut slot| slot.take()) {
+        let _ = viewer.kill();
+        let _ = viewer.wait();
+    }
+    drop(run_dir);
 
     println!("Success: Hotspot stopped and cleaned up successfully.");
 
@@ -208,14 +239,12 @@ const SYS_CLASS_NET: &str = "/sys/class/net";
 fn get_network_interfaces() -> Vec<String> {
     let mut interfaces = Vec::new();
     if let Ok(entries) = fs::read_dir(SYS_CLASS_NET) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                if let Some(name) = entry.file_name().to_str() {
-                    // Filter out loopback
-                    if name != "lo" {
-                        interfaces.push(name.to_string());
-                    }
-                }
+        for entry in entries.flatten() {
+            // Filter out loopback
+            if let Some(name) = entry.file_name().to_str()
+                && name != "lo"
+            {
+                interfaces.push(name.to_string());
             }
         }
     }
@@ -254,46 +283,52 @@ fn parse_default_route(route_table: &str) -> Option<String> {
 
 fn cleanup_virtual_interfaces() {
     println!("Cleaning up leftover virtual AP interfaces...");
+    let in_use = create_ap::interfaces_in_use();
     let interfaces = get_network_interfaces();
     for iface in interfaces {
-        if iface.starts_with("ap") {
-            println!("  Deleting {}...", iface);
-            let _ = Command::new("sudo")
-                .args(&["iw", "dev", &iface, "del"])
-                .status();
+        if !iface.starts_with("ap") {
+            continue;
         }
+        if in_use.contains(&iface) {
+            println!("  Keeping {} (used by another running hotspot)", iface);
+            continue;
+        }
+        println!("  Deleting {}...", iface);
+        let _ = Command::new("sudo")
+            .args(["iw", "dev", &iface, "del"])
+            .status();
     }
 }
 
 fn check_and_patch_create_ap() {
-    if let Ok(content) = fs::read_to_string("/usr/bin/create_ap") {
-        if !content.contains("cut -d. -f1") {
-            println!("Warning: Legacy create_ap bug detected (frequency decimal parsing).");
-            print!("Do you want to patch /usr/bin/create_ap automatically? [Y/n]: ");
-            let _ = io::stdout().flush();
-            let mut input = String::new();
-            if io::stdin().read_line(&mut input).is_ok() {
-                let input = input.trim().to_lowercase();
-                if input == "y" || input.is_empty() {
-                    println!("Patching /usr/bin/create_ap...");
+    if let Ok(content) = fs::read_to_string("/usr/bin/create_ap")
+        && !content.contains("cut -d. -f1")
+    {
+        println!("Warning: Legacy create_ap bug detected (frequency decimal parsing).");
+        print!("Do you want to patch /usr/bin/create_ap automatically? [Y/n]: ");
+        let _ = io::stdout().flush();
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_ok() {
+            let input = input.trim().to_lowercase();
+            if input == "y" || input.is_empty() {
+                println!("Patching /usr/bin/create_ap...");
 
-                    // Apply decimal fix
-                    let _ = Command::new("sudo")
-                        .args(&[
-                            "sed",
-                            "-i",
-                            "/WIFI_IFACE_FREQ=/s/awk '{print $2}'/awk '{print $2}' | cut -d. -f1/",
-                            "/usr/bin/create_ap",
-                        ])
-                        .status();
+                // Apply decimal fix
+                let _ = Command::new("sudo")
+                    .args([
+                        "sed",
+                        "-i",
+                        "/WIFI_IFACE_FREQ=/s/awk '{print $2}'/awk '{print $2}' | cut -d. -f1/",
+                        "/usr/bin/create_ap",
+                    ])
+                    .status();
 
-                    // Apply can_transmit_to_channel override
-                    let _ = Command::new("sudo")
-                        .args(&["sed", "-i", "s/can_transmit_to_channel() {/can_transmit_to_channel() {\\n    return 0/g", "/usr/bin/create_ap"])
-                        .status();
+                // Apply can_transmit_to_channel override
+                let _ = Command::new("sudo")
+                    .args(["sed", "-i", "s/can_transmit_to_channel() {/can_transmit_to_channel() {\\n    return 0/g", "/usr/bin/create_ap"])
+                    .status();
 
-                    println!("Success: Patches applied successfully!");
-                }
+                println!("Success: Patches applied successfully!");
             }
         }
     }
@@ -314,7 +349,7 @@ fn wifi_qr_payload(ssid: &str, password: &str) -> String {
     format!("WIFI:T:WPA;S:{};P:{};;", escape(ssid), escape(password))
 }
 
-fn save_qr_code_png(ssid: &str, password: &str) -> Option<String> {
+fn save_qr_code_png(ssid: &str, password: &str, dir: &Path) -> Option<PathBuf> {
     let wifi_str = wifi_qr_payload(ssid, password);
     if let Ok(code) = QrCode::new(wifi_str.as_bytes()) {
         let image = code
@@ -322,15 +357,16 @@ fn save_qr_code_png(ssid: &str, password: &str) -> Option<String> {
             .quiet_zone(true)
             .module_dimensions(10, 10) // 10x10 pixels per QR module for a crisp high-res image
             .build();
-        let path = "/tmp/omarchy_hotspot_qr.png";
-        if image.save(path).is_ok() {
-            return Some(path.to_string());
+        let path = dir.join("qr.png");
+        if image.save(&path).is_ok() {
+            return Some(path);
         }
     }
     None
 }
 
-fn show_dashboard(ssid: &str, password: &str) {
+/// Prints the dashboard and returns the QR image viewer it opened, if any.
+fn show_dashboard(ssid: &str, password: &str, qr_dir: Option<&Path>) -> Option<Child> {
     // Clear screen and move cursor to top-left
     print!("{}[2J{}[1;1H", 27 as char, 27 as char);
     let _ = io::stdout().flush();
@@ -345,14 +381,17 @@ fn show_dashboard(ssid: &str, password: &str) {
     println!();
 
     // 1. Save and open the QR Code PNG using imv (visual pop-up)
-    if let Some(path) = save_qr_code_png(ssid, password) {
-        println!("Opening high-contrast QR Code in image viewer (imv)...");
-        let _ = Command::new("imv")
-            .arg(&path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-    }
+    let viewer = qr_dir
+        .and_then(|dir| save_qr_code_png(ssid, password, dir))
+        .and_then(|path| {
+            println!("Opening high-contrast QR Code in image viewer (imv)...");
+            Command::new("imv")
+                .arg(&path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .ok()
+        });
 
     println!();
     println!("Scan the QR Code on your screen to connect automatically.");
@@ -408,6 +447,7 @@ fn show_dashboard(ssid: &str, password: &str) {
     println!("========================================================");
     println!("Press Ctrl+C at any time to stop the hotspot.");
     println!("========================================================");
+    viewer
 }
 
 fn check_dependencies() {
@@ -487,10 +527,8 @@ fn print_logo() {
 }
 
 fn cleanup_stale_processes() {
-    println!("Cleaning up leftover dnsmasq processes from previous runs...");
-    let _ = Command::new("sudo")
-        .args(&["pkill", "-f", "dnsmasq -C /tmp/create_ap"])
-        .status();
+    println!("Cleaning up helper processes left by crashed hotspot sessions...");
+    create_ap::kill_stale_helpers();
 }
 
 #[cfg(test)]
@@ -547,6 +585,15 @@ mod tests {
     fn returns_none_without_default_route() {
         let table = "Iface\tDestination\tGateway\nwlp4s0\t0010A8C0\t00000000\n";
         assert_eq!(parse_default_route(table), None);
+    }
+
+    #[test]
+    fn qr_code_is_saved_as_png() {
+        // Fails at runtime, not compile time, if the `png` image feature is dropped.
+        let dir = RunDir::create().unwrap();
+        let path = save_qr_code_png("DCT_Linux", "Tryhackm3;", dir.path())
+            .expect("QR code PNG should be written");
+        assert!(fs::read(path).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
     }
 
     #[test]
