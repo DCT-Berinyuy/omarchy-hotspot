@@ -5,10 +5,23 @@
 # omarchy-hotspot
 
 [![CI](https://github.com/DCT-Berinyuy/omarchy-hotspot/actions/workflows/ci.yml/badge.svg)](https://github.com/DCT-Berinyuy/omarchy-hotspot/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/DCT-Berinyuy/omarchy-hotspot)](https://github.com/DCT-Berinyuy/omarchy-hotspot/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 An interactive, terminal-based Wi-Fi hotspot manager built in Rust, tailored for Arch Linux configurations (like Omarchy) running minimalist Wayland compositors (like Hyprland).
 
-`omarchy-hotspot` wraps `create_ap` and other system commands to automate virtual interface conflicts, dependency validations, and configuration wizards, providing a clean console dashboard with a scan-to-connect QR code.
+`omarchy-hotspot` wraps `create_ap` and other system commands to automate virtual interface conflicts, dependency validations, and configuration wizards, providing a clean console dashboard with a scan-to-connect QR code and a live list of connected devices.
+
+<p align="center">
+  <img src="assets/dashboard.png" width="420" alt="omarchy-hotspot running in a terminal: the Omarchy Hotspot banner, the network name and password, and a QR code to scan">
+</p>
+
+Devices then appear below the dashboard as they join and leave:
+
+```text
+   + Pixel-7 (192.168.12.34) joined · 1 device connected
+   - Pixel-7 (192.168.12.34) left · 0 devices connected
+```
 
 ---
 
