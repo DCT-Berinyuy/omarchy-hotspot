@@ -8,15 +8,15 @@
 
 An interactive, terminal-based Wi-Fi hotspot manager built in Rust, tailored for Arch Linux configurations (like Omarchy) running minimalist Wayland compositors (like Hyprland).
 
-`omarchy-hotspot` wraps `create_ap` and other system commands to automate virtual interface conflicts, dependency validations, legacy script bugs, and configuration wizards, providing a clean console dashboard with a scan-to-connect QR code.
+`omarchy-hotspot` wraps `create_ap` and other system commands to automate virtual interface conflicts, dependency validations, and configuration wizards, providing a clean console dashboard with a scan-to-connect QR code.
 
 ---
 
 ## Features
 
-*   **Dependency Doctor:** Validates system requirements (`create_ap`, `hostapd`, `dnsmasq`, `imv`) at startup and offers to auto-install missing packages using `pacman`.
+*   **Dependency Doctor:** Validates system requirements (`create_ap`, `hostapd`, `dnsmasq`, `iptables`, `imv`) at startup. It offers to install missing official packages with `pacman`, and prints the `yay` command when `create_ap` itself is missing.
+*   **create_ap Check:** Warns if the original, unmaintained `create_ap` is installed and shows how to switch to the maintained fork. `omarchy-hotspot` never modifies `create_ap`.
 *   **Auto-Cleanup:** Detects and deletes orphaned virtual interfaces (like `ap0`, `ap1`, `ap2`) left by failed or interrupted hotspot sessions, avoiding `Device or resource busy` errors. Interfaces and processes belonging to other running `create_ap` sessions are left alone.
-*   **Legacy Bug Patcher:** Auto-detects legacy decimal-point parsing bugs in `/usr/bin/create_ap` and applies system patches automatically.
 *   **Interactive Setup Wizard:** Guided terminal UI prompts to set SSID, WPA2 password (a fresh random one is suggested each run), and interface routing (e.g. sharing Wi-Fi connection over a virtual AP on the same card). The password is passed to `create_ap` over stdin, never on the command line, and the QR image is kept in a private temporary directory that is deleted on exit.
 *   **QR Code Dashboard:** Opens a high-contrast QR code in `imv`, with an ANSI QR code in the terminal as a fallback. Scan it with a phone camera to connect without typing the password.
 *   **Safe Signal Cleanup:** Handles termination signals (`Ctrl+C`) to cleanly stop the hotspot it started (waiting for `create_ap`'s own cleanup) and delete virtual interfaces from your wireless card.
@@ -28,6 +28,13 @@ An interactive, terminal-based Wi-Fi hotspot manager built in Rust, tailored for
 *   Arch Linux or derivatives.
 *   `sudo` permissions.
 *   Wireless card supporting AP mode concurrent with Station mode (virtual APs).
+*   `create_ap` from [linux-wifi-hotspot](https://github.com/lakinduakash/linux-wifi-hotspot), the maintained fork, plus `dnsmasq`, `iptables` and `imv`. Install them as your normal user, not with `sudo` (AUR helpers refuse to run as root):
+
+    ```bash
+    yay -S --needed linux-wifi-hotspot dnsmasq iptables imv
+    ```
+
+    The package also installs a GTK app, `wihotspot`; `omarchy-hotspot` only uses its `create_ap`. The original `create_ap` (AUR `create_ap` or `create_ap-git`) is no longer maintained and fails on current Arch; installing `linux-wifi-hotspot` replaces it.
 
 ---
 
@@ -99,6 +106,12 @@ Your Wi-Fi card does not need to be connected to any network; it only acts as th
 If you encounter `RTNETLINK answers: Device or resource busy`, the program will attempt to auto-clean old virtual interfaces. If it persists, you can manually run:
 ```bash
 for dev in ap0 ap1 ap2 ap3; do sudo iw dev $dev del 2>/dev/null || true; done
+```
+
+### `can not transmit to channel` or `2412.0: arithmetic syntax error`
+These errors come from the original `create_ap`, which can't parse the frequencies current `iw` prints (`2412.0 MHz`). Replace it with the maintained fork, as your normal user:
+```bash
+yay -S linux-wifi-hotspot
 ```
 
 ---
