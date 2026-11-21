@@ -1,3 +1,4 @@
+mod clients;
 mod create_ap;
 mod credentials;
 mod deps;
@@ -12,7 +13,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -152,6 +153,12 @@ fn main() -> io::Result<()> {
     let create_ap_pid = Arc::new(AtomicU32::new(0));
     let qr_viewer: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
 
+    // Joins and leaves are reported from their own thread, so waiting for a
+    // device's DHCP lease never holds up create_ap's output.
+    let (devices_tx, devices_rx) = mpsc::channel();
+    let running_for_devices = running.clone();
+    thread::spawn(move || clients::report_changes(devices_rx, running_for_devices));
+
     // Thread to monitor stdout and show TUI when AP is enabled
     let ssid_clone = ssid.clone();
     let password_clone = password.clone();
@@ -176,6 +183,12 @@ fn main() -> io::Result<()> {
                 }
                 if let Some(pid) = create_ap::parse_pid_line(&line) {
                     pid_clone.store(pid, Ordering::SeqCst);
+                }
+                if let Some(path) = clients::parse_lease_file(&line) {
+                    let _ = devices_tx.send(clients::Message::LeaseFile(path));
+                }
+                if let Some(station) = clients::parse_station_event(&line) {
+                    let _ = devices_tx.send(clients::Message::Station(station));
                 }
                 if line.contains("AP-ENABLED") {
                     ap_enabled = true;
@@ -419,6 +432,7 @@ fn show_dashboard(ssid: &str, password: &str, qr_dir: Option<&Path>) -> Option<C
     println!();
     println!("========================================================");
     println!("Press Ctrl+C at any time to stop the hotspot.");
+    println!("Devices are listed below as they join and leave.");
     println!("========================================================");
     viewer
 }
