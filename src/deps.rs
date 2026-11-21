@@ -63,13 +63,13 @@ pub enum CreateApKind {
 /// Checks dependencies and offers to install missing repo packages. Exits the
 /// process when a requirement cannot be met.
 pub fn run_doctor() -> CreateApKind {
-    println!("Running Dependency Doctor...");
+    outln!("Running Dependency Doctor...");
     let missing: Vec<&Dependency> = DEPENDENCIES
         .iter()
         .filter(|dep| find_in_path(dep.binary).is_none())
         .collect();
     if missing.is_empty() {
-        println!("Success: All dependencies are installed.");
+        outln!("Success: All dependencies are installed.");
     } else {
         install_missing(&missing);
     }
@@ -80,15 +80,15 @@ pub fn run_doctor() -> CreateApKind {
             classify_create_ap(&String::from_utf8_lossy(&script))
         });
     if let CreateApKind::Legacy { patched } = kind {
-        println!(
+        outln!(
             "Warning: The installed create_ap is the original version, which is no longer maintained."
         );
         if patched {
-            println!(
+            outln!(
                 "   An older omarchy-hotspot patched it in place, which turned off its channel check."
             );
         } else {
-            println!(
+            outln!(
                 "   It fails on current Arch, where iw reports frequencies like \"2412.0 MHz\"."
             );
         }
@@ -98,13 +98,13 @@ pub fn run_doctor() -> CreateApKind {
 }
 
 pub fn print_switch_hint() {
-    println!("   Switch to the maintained fork, which replaces it (run as your normal user):");
-    println!("   yay -S {CREATE_AP_PACKAGE}");
+    outln!("   Switch to the maintained fork, which replaces it (run as your normal user):");
+    outln!("   yay -S {CREATE_AP_PACKAGE}");
 }
 
 fn install_missing(missing: &[&Dependency]) {
     let names: Vec<&str> = missing.iter().map(|dep| dep.binary).collect();
-    println!(
+    outln!(
         "Warning: Missing required dependencies: {}",
         names.join(", ")
     );
@@ -117,41 +117,39 @@ fn install_missing(missing: &[&Dependency]) {
         .collect();
     if !aur.is_empty() {
         // yay installs official packages too, so one command covers everything.
-        eprintln!(
+        errln!(
             "Error: {} must be installed from the AUR, and AUR helpers refuse to run as root.",
             aur.join(", ")
         );
-        eprintln!(
-            "   Run this as your normal user (without sudo), then start omarchy-hotspot again:"
-        );
-        eprintln!("   yay -S --needed {}", packages.join(" "));
+        errln!("   Run this as your normal user (without sudo), then start omarchy-hotspot again:");
+        errln!("   yay -S --needed {}", packages.join(" "));
         process::exit(1);
     }
     install_repo_packages(&packages);
 }
 
 fn install_repo_packages(packages: &[&str]) {
-    print!("Install {} with pacman? [Y/n]: ", packages.join(" "));
+    out!("Install {} with pacman? [Y/n]: ", packages.join(" "));
     let _ = io::stdout().flush();
     let mut input = String::new();
     // End of input (stdin closed or not interactive) is not consent; a bare Enter is.
     let accepted = matches!(io::stdin().read_line(&mut input), Ok(read) if read > 0)
         && matches!(input.trim().to_lowercase().as_str(), "" | "y" | "yes");
     if !accepted {
-        eprintln!("Error: Dependencies are missing. The hotspot manager cannot run without them.");
+        errln!("Error: Dependencies are missing. The hotspot manager cannot run without them.");
         process::exit(1);
     }
 
-    println!("Installing dependencies...");
+    outln!("Installing dependencies...");
     let status = Command::new("sudo")
         .args(["pacman", "-S", "--needed", "--noconfirm"])
         .args(packages)
         .status();
     if matches!(status, Ok(status) if status.success()) {
-        println!("Success: Dependencies installed successfully!");
+        outln!("Success: Dependencies installed successfully!");
     } else {
-        eprintln!("Error: Failed to install dependencies automatically.");
-        eprintln!(
+        errln!("Error: Failed to install dependencies automatically.");
+        errln!(
             "   Please run: sudo pacman -S --needed {}",
             packages.join(" ")
         );

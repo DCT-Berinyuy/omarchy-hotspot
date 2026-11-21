@@ -55,7 +55,7 @@ pub fn interfaces_in_use() -> Vec<String> {
 /// died without cleaning up. Helpers of running instances are left alone.
 pub fn kill_stale_helpers() {
     for pid in stale_helper_pids(Path::new(TMP_DIR), Path::new(PROC_DIR)) {
-        println!("  Stopping orphaned helper process {pid}...");
+        outln!("  Stopping orphaned helper process {pid}...");
         send_signal(pid, "TERM");
     }
 }
@@ -72,7 +72,7 @@ pub fn stop(child: &mut Child, create_ap_pid: Option<u32>) {
         if wait_for_exit(child, CLEANUP_TIMEOUT) {
             return;
         }
-        eprintln!("Warning: create_ap did not finish its cleanup in time; forcing it to stop.");
+        errln!("Warning: create_ap did not finish its cleanup in time; forcing it to stop.");
     }
     let _ = child.kill();
     let _ = child.wait();
@@ -94,7 +94,7 @@ fn send_signal(pid: u32, signal: &str) {
         .args(["kill", "-s", signal, &pid.to_string()])
         .status();
     if !matches!(result, Ok(status) if status.success()) {
-        eprintln!("Warning: failed to send SIG{signal} to process {pid}.");
+        errln!("Warning: failed to send SIG{signal} to process {pid}.");
     }
 }
 

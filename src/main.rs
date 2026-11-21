@@ -1,3 +1,28 @@
+// Terminal output that never panics. Once the terminal window is closed, every
+// write fails and `println!` would panic, killing the app before create_ap has
+// finished its cleanup. Use these instead of the standard print macros.
+macro_rules! out {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = write!(std::io::stdout(), $($arg)*);
+    }};
+}
+
+macro_rules! outln {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($arg)*);
+    }};
+}
+
+macro_rules! errln {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
+mod clients;
 mod create_ap;
 mod credentials;
 mod deps;
@@ -12,13 +37,13 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
 fn main() -> io::Result<()> {
     print_logo();
-    println!("Starting Omarchy Hotspot Setup Manager...\n");
+    outln!("Starting Omarchy Hotspot Setup Manager...\n");
 
     // 1. Check required dependencies and which create_ap is installed
     let create_ap_kind = deps::run_doctor();
@@ -30,13 +55,13 @@ fn main() -> io::Result<()> {
     // 3. Detect network interfaces
     let interfaces = get_network_interfaces();
     if interfaces.is_empty() {
-        eprintln!("Error: No network interfaces found!");
+        errln!("Error: No network interfaces found!");
         return Ok(());
     }
 
     let wireless_interfaces = get_wireless_interfaces(Path::new(SYS_CLASS_NET), &interfaces);
     if wireless_interfaces.is_empty() {
-        eprintln!(
+        errln!(
             "Error: No Wi-Fi adapter found! A wireless card is required to broadcast a hotspot."
         );
         return Ok(());
@@ -45,16 +70,16 @@ fn main() -> io::Result<()> {
     let default_internet = detect_default_gateway_interface();
     let default_wifi = &wireless_interfaces[0];
 
-    println!("Detected network interfaces: {:?}", interfaces);
-    println!("Detected Wi-Fi adapters:     {:?}", wireless_interfaces);
-    println!(
+    outln!("Detected network interfaces: {:?}", interfaces);
+    outln!("Detected Wi-Fi adapters:     {:?}", wireless_interfaces);
+    outln!(
         "Suggested Internet Source:   {}",
         default_internet
             .as_deref()
             .unwrap_or("(no default route found)")
     );
-    println!("Suggested Wi-Fi Adapter:     {}", default_wifi);
-    println!();
+    outln!("Suggested Wi-Fi Adapter:     {}", default_wifi);
+    outln!();
 
     // 4. Interactive prompts using dialoguer
     let theme = ColorfulTheme::default();
@@ -103,19 +128,20 @@ fn main() -> io::Result<()> {
         "Wired (Ethernet) -> Wi-Fi"
     };
 
-    println!("\nConfiguration Summary:");
-    println!("   SSID:      {}", ssid);
-    println!("   Password:  {}", password);
-    println!("   Sharing:   {} -> {}", internet_iface, wifi_iface);
-    println!("   Mode:      {}", mode);
-    println!();
+    outln!("\nConfiguration Summary:");
+    outln!("   SSID:      {}", ssid);
+    outln!("   Password:  {}", password);
+    outln!("   Sharing:   {} -> {}", internet_iface, wifi_iface);
+    outln!("   Mode:      {}", mode);
+    outln!();
 
-    // 5. Setup exit signal handling
+    // 5. Setup exit signal handling. Ctrl+C, closing the terminal (SIGHUP) and
+    // SIGTERM all stop the hotspot the same way, so create_ap can clean up.
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
     ctrlc::set_handler(move || {
-        println!("\nReceived exit signal! Initiating shutdown...");
         r.store(false, Ordering::SeqCst);
+        outln!("\nReceived exit signal! Initiating shutdown...");
     })
     .expect("Error setting Ctrl-C handler");
 
@@ -123,14 +149,14 @@ fn main() -> io::Result<()> {
     let run_dir = match RunDir::create() {
         Ok(dir) => Some(dir),
         Err(e) => {
-            eprintln!("Warning: cannot create a private temp directory ({e}); QR image disabled.");
+            errln!("Warning: cannot create a private temp directory ({e}); QR image disabled.");
             None
         }
     };
 
     // 6. Spawn create_ap process. SSID and password go through stdin so the
     // password never appears in the process list.
-    println!("Starting create_ap...");
+    outln!("Starting create_ap...");
     // --no-haveged: create_ap's low-entropy check always fires on current
     // kernels (entropy_avail is fixed at 256), and haveged is obsolete.
     let mut child = Command::new("sudo")
@@ -143,7 +169,7 @@ fn main() -> io::Result<()> {
     if let Some(mut stdin) = child.stdin.take()
         && let Err(e) = stdin.write_all(create_ap::credentials_stdin(&ssid, &password).as_bytes())
     {
-        eprintln!("Error: could not pass the SSID and password to create_ap: {e}");
+        errln!("Error: could not pass the SSID and password to create_ap: {e}");
     }
 
     let child_stdout = child.stdout.take().expect("Failed to open stdout");
@@ -151,6 +177,12 @@ fn main() -> io::Result<()> {
 
     let create_ap_pid = Arc::new(AtomicU32::new(0));
     let qr_viewer: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
+
+    // Joins and leaves are reported from their own thread, so waiting for a
+    // device's DHCP lease never holds up create_ap's output.
+    let (devices_tx, devices_rx) = mpsc::channel();
+    let running_for_devices = running.clone();
+    thread::spawn(move || clients::report_changes(devices_rx, running_for_devices));
 
     // Thread to monitor stdout and show TUI when AP is enabled
     let ssid_clone = ssid.clone();
@@ -172,10 +204,16 @@ fn main() -> io::Result<()> {
             }
             if let Ok(line) = line {
                 if !ap_enabled {
-                    println!("   [create_ap] {}", line);
+                    outln!("   [create_ap] {}", line);
                 }
                 if let Some(pid) = create_ap::parse_pid_line(&line) {
                     pid_clone.store(pid, Ordering::SeqCst);
+                }
+                if let Some(path) = clients::parse_lease_file(&line) {
+                    let _ = devices_tx.send(clients::Message::LeaseFile(path));
+                }
+                if let Some(station) = clients::parse_station_event(&line) {
+                    let _ = devices_tx.send(clients::Message::Station(station));
                 }
                 if line.contains("AP-ENABLED") {
                     ap_enabled = true;
@@ -193,19 +231,19 @@ fn main() -> io::Result<()> {
         let reader = BufReader::new(child_stderr);
         for line in reader.lines() {
             let Ok(line) = line else { continue };
-            eprintln!("   [create_ap error] {}", line);
+            errln!("   [create_ap error] {}", line);
         }
     });
 
     // Main loop: Wait until exit signal
     while running.load(Ordering::SeqCst) {
         if let Ok(Some(_)) = child.try_wait() {
-            println!("Error: create_ap terminated unexpectedly.");
+            outln!("Error: create_ap terminated unexpectedly.");
             if matches!(
                 create_ap_kind,
                 deps::CreateApKind::Legacy { patched: false }
             ) {
-                println!("   The original create_ap is the likely cause.");
+                outln!("   The original create_ap is the likely cause.");
                 deps::print_switch_hint();
             }
             break;
@@ -215,7 +253,7 @@ fn main() -> io::Result<()> {
 
     // 7. Cleanup on exit: signal only our own create_ap instance and wait for
     // its cleanup, leaving other hotspot sessions untouched.
-    println!("Stopping create_ap...");
+    outln!("Stopping create_ap...");
     let pid = match create_ap_pid.load(Ordering::SeqCst) {
         0 => None,
         pid => Some(pid),
@@ -233,7 +271,7 @@ fn main() -> io::Result<()> {
     }
     drop(run_dir);
 
-    println!("Success: Hotspot stopped and cleaned up successfully.");
+    outln!("Success: Hotspot stopped and cleaned up successfully.");
 
     // We explicitly avoid stdout_handle.join() and stderr_handle.join()
     // to prevent deadlocks when closing the process pipes on Ctrl+C.
@@ -289,7 +327,7 @@ fn parse_default_route(route_table: &str) -> Option<String> {
 }
 
 fn cleanup_virtual_interfaces() {
-    println!("Cleaning up leftover virtual AP interfaces...");
+    outln!("Cleaning up leftover virtual AP interfaces...");
     let in_use = create_ap::interfaces_in_use();
     let interfaces = get_network_interfaces();
     for iface in interfaces {
@@ -297,10 +335,10 @@ fn cleanup_virtual_interfaces() {
             continue;
         }
         if in_use.contains(&iface) {
-            println!("  Keeping {} (used by another running hotspot)", iface);
+            outln!("  Keeping {} (used by another running hotspot)", iface);
             continue;
         }
-        println!("  Deleting {}...", iface);
+        outln!("  Deleting {}...", iface);
         let _ = Command::new("sudo")
             .args(["iw", "dev", &iface, "del"])
             .status();
@@ -341,23 +379,23 @@ fn save_qr_code_png(ssid: &str, password: &str, dir: &Path) -> Option<PathBuf> {
 /// Prints the dashboard and returns the QR image viewer it opened, if any.
 fn show_dashboard(ssid: &str, password: &str, qr_dir: Option<&Path>) -> Option<Child> {
     // Clear screen and move cursor to top-left
-    print!("{}[2J{}[1;1H", 27 as char, 27 as char);
+    out!("{}[2J{}[1;1H", 27 as char, 27 as char);
     let _ = io::stdout().flush();
 
     print_logo();
-    println!("========================================================");
-    println!("          HOTSPOT IS NOW ACTIVE                         ");
-    println!("========================================================");
-    println!();
-    println!("   SSID (Name):   \x1b[1;32m{}\x1b[0m", ssid);
-    println!("   Password:      \x1b[1;32m{}\x1b[0m", password);
-    println!();
+    outln!("========================================================");
+    outln!("          HOTSPOT IS NOW ACTIVE                         ");
+    outln!("========================================================");
+    outln!();
+    outln!("   SSID (Name):   \x1b[1;32m{}\x1b[0m", ssid);
+    outln!("   Password:      \x1b[1;32m{}\x1b[0m", password);
+    outln!();
 
     // 1. Save and open the QR Code PNG using imv (visual pop-up)
     let viewer = qr_dir
         .and_then(|dir| save_qr_code_png(ssid, password, dir))
         .and_then(|path| {
-            println!("Opening high-contrast QR Code in image viewer (imv)...");
+            outln!("Opening high-contrast QR Code in image viewer (imv)...");
             Command::new("imv")
                 .arg(&path)
                 .stdout(Stdio::null())
@@ -366,10 +404,10 @@ fn show_dashboard(ssid: &str, password: &str, qr_dir: Option<&Path>) -> Option<C
                 .ok()
         });
 
-    println!();
-    println!("Scan the QR Code on your screen to connect automatically.");
-    println!("If the image window didn't open, here is a terminal fallback:");
-    println!();
+    outln!();
+    outln!("Scan the QR Code on your screen to connect automatically.");
+    outln!("If the image window didn't open, here is a terminal fallback:");
+    outln!();
 
     // 2. Terminal Fallback QR Code
     let wifi_str = wifi_qr_payload(ssid, password);
@@ -384,64 +422,65 @@ fn show_dashboard(ssid: &str, password: &str, qr_dir: Option<&Path>) -> Option<C
         // Top quiet zone
         for _ in 0..quiet_zone {
             for _ in 0..(width + quiet_zone * 2) {
-                print!("{}", white_block);
+                out!("{}", white_block);
             }
-            println!("{}", reset_color);
+            outln!("{}", reset_color);
         }
 
         for y in 0..width {
             // Left quiet zone
             for _ in 0..quiet_zone {
-                print!("{}", white_block);
+                out!("{}", white_block);
             }
             for x in 0..width {
                 if code[(x, y)] == qrcode::Color::Dark {
-                    print!("{}", black_block);
+                    out!("{}", black_block);
                 } else {
-                    print!("{}", white_block);
+                    out!("{}", white_block);
                 }
             }
             // Right quiet zone
             for _ in 0..quiet_zone {
-                print!("{}", white_block);
+                out!("{}", white_block);
             }
-            println!("{}", reset_color);
+            outln!("{}", reset_color);
         }
 
         // Bottom quiet zone
         for _ in 0..quiet_zone {
             for _ in 0..(width + quiet_zone * 2) {
-                print!("{}", white_block);
+                out!("{}", white_block);
             }
-            println!("{}", reset_color);
+            outln!("{}", reset_color);
         }
     }
-    println!();
-    println!("========================================================");
-    println!("Press Ctrl+C at any time to stop the hotspot.");
-    println!("========================================================");
+    outln!();
+    outln!("========================================================");
+    outln!("Press Ctrl+C at any time to stop the hotspot.");
+    outln!("Devices are listed below as they join and leave.");
+    outln!("========================================================");
     viewer
 }
 
 fn print_logo() {
-    println!("\x1b[1;32m");
-    println!("  ___                           _");
-    println!(" / _ \\ _ __ ___   __ _ _ __ ___| |__  _   _");
-    println!("| | | | '_ ` _ \\ / _` | '__/ __| '_ \\| | | |");
-    println!("| |_| | | | | | | (_| | | | (__| | | | |_| |");
-    println!(" \\___/|_| |_| |_|\\__,_|_|  \\___|_| |_|\\__, |");
-    println!("                                      |___/");
-    println!(" _   _       _                   _");
-    println!("| | | | ___ | |_ ___ _ __   ___ | |_");
-    println!("| |_| |/ _ \\| __/ __| '_ \\ / _ \\| __|");
-    println!("|  _  | (_) | |_\\__ \\ |_) | (_) | |_");
-    println!("|_| |_|\\___/ \\__|___/ .__/ \\___/ \\__|");
-    println!("                    |_|");
-    println!("\x1b[0m");
+    outln!("\x1b[1;32m");
+    outln!("  ___                           _");
+    outln!(" / _ \\ _ __ ___   __ _ _ __ ___| |__  _   _");
+    outln!("| | | | '_ ` _ \\ / _` | '__/ __| '_ \\| | | |");
+    outln!("| |_| | | | | | | (_| | | | (__| | | | |_| |");
+    outln!(" \\___/|_| |_| |_|\\__,_|_|  \\___|_| |_|\\__, |");
+    outln!("                                      |___/");
+    outln!(" _   _       _                   _");
+    outln!("| | | | ___ | |_ ___ _ __   ___ | |_");
+    outln!("| |_| |/ _ \\| __/ __| '_ \\ / _ \\| __|");
+    outln!("|  _  | (_) | |_\\__ \\ |_) | (_) | |_");
+    outln!("|_| |_|\\___/ \\__|___/ .__/ \\___/ \\__|");
+    outln!("                    |_|");
+    outln!("\x1b[0m");
 }
 
 fn cleanup_stale_processes() {
-    println!("Cleaning up helper processes left by crashed hotspot sessions...");
+    outln!("Cleaning up helper processes left by crashed hotspot sessions...");
     create_ap::kill_stale_helpers();
 }
 
