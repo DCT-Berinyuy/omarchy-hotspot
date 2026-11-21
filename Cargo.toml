@@ -8,7 +8,7 @@ repository = "https://github.com/DCT-Berinyuy/omarchy-hotspot"
 readme = "README.md"
 
 [dependencies]
-ctrlc = "3.5.2"
+ctrlc = { version = "3.5.2", features = ["termination"] }
 dialoguer = "0.12.0"
 # Only PNG output is needed for the QR code image.
 image = { version = "0.25.10", default-features = false, features = ["png"] }

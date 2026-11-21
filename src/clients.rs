@@ -76,7 +76,7 @@ pub fn report_changes(messages: Receiver<Message>, running: Arc<AtomicBool>) {
         // Stay quiet once shutdown starts: hostapd drops every device as it stops.
         if running.load(Ordering::SeqCst) {
             for change in changes {
-                println!("{change}");
+                outln!("{change}");
             }
         }
     }
