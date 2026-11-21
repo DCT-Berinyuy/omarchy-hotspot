@@ -192,9 +192,8 @@ fn main() -> io::Result<()> {
     thread::spawn(move || {
         let reader = BufReader::new(child_stderr);
         for line in reader.lines() {
-            if let Ok(line) = line {
-                eprintln!("   [create_ap error] {}", line);
-            }
+            let Ok(line) = line else { continue };
+            eprintln!("   [create_ap error] {}", line);
         }
     });
 
@@ -240,14 +239,12 @@ const SYS_CLASS_NET: &str = "/sys/class/net";
 fn get_network_interfaces() -> Vec<String> {
     let mut interfaces = Vec::new();
     if let Ok(entries) = fs::read_dir(SYS_CLASS_NET) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                if let Some(name) = entry.file_name().to_str() {
-                    // Filter out loopback
-                    if name != "lo" {
-                        interfaces.push(name.to_string());
-                    }
-                }
+        for entry in entries.flatten() {
+            // Filter out loopback
+            if let Some(name) = entry.file_name().to_str()
+                && name != "lo"
+            {
+                interfaces.push(name.to_string());
             }
         }
     }
@@ -304,34 +301,34 @@ fn cleanup_virtual_interfaces() {
 }
 
 fn check_and_patch_create_ap() {
-    if let Ok(content) = fs::read_to_string("/usr/bin/create_ap") {
-        if !content.contains("cut -d. -f1") {
-            println!("Warning: Legacy create_ap bug detected (frequency decimal parsing).");
-            print!("Do you want to patch /usr/bin/create_ap automatically? [Y/n]: ");
-            let _ = io::stdout().flush();
-            let mut input = String::new();
-            if io::stdin().read_line(&mut input).is_ok() {
-                let input = input.trim().to_lowercase();
-                if input == "y" || input.is_empty() {
-                    println!("Patching /usr/bin/create_ap...");
+    if let Ok(content) = fs::read_to_string("/usr/bin/create_ap")
+        && !content.contains("cut -d. -f1")
+    {
+        println!("Warning: Legacy create_ap bug detected (frequency decimal parsing).");
+        print!("Do you want to patch /usr/bin/create_ap automatically? [Y/n]: ");
+        let _ = io::stdout().flush();
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_ok() {
+            let input = input.trim().to_lowercase();
+            if input == "y" || input.is_empty() {
+                println!("Patching /usr/bin/create_ap...");
 
-                    // Apply decimal fix
-                    let _ = Command::new("sudo")
-                        .args(&[
-                            "sed",
-                            "-i",
-                            "/WIFI_IFACE_FREQ=/s/awk '{print $2}'/awk '{print $2}' | cut -d. -f1/",
-                            "/usr/bin/create_ap",
-                        ])
-                        .status();
+                // Apply decimal fix
+                let _ = Command::new("sudo")
+                    .args([
+                        "sed",
+                        "-i",
+                        "/WIFI_IFACE_FREQ=/s/awk '{print $2}'/awk '{print $2}' | cut -d. -f1/",
+                        "/usr/bin/create_ap",
+                    ])
+                    .status();
 
-                    // Apply can_transmit_to_channel override
-                    let _ = Command::new("sudo")
-                        .args(&["sed", "-i", "s/can_transmit_to_channel() {/can_transmit_to_channel() {\\n    return 0/g", "/usr/bin/create_ap"])
-                        .status();
+                // Apply can_transmit_to_channel override
+                let _ = Command::new("sudo")
+                    .args(["sed", "-i", "s/can_transmit_to_channel() {/can_transmit_to_channel() {\\n    return 0/g", "/usr/bin/create_ap"])
+                    .status();
 
-                    println!("Success: Patches applied successfully!");
-                }
+                println!("Success: Patches applied successfully!");
             }
         }
     }
