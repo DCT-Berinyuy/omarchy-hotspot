@@ -2,6 +2,9 @@
 
 This guide explains how we configured your Wi-Fi hotspot on your Arch Linux (Omarchy) system using [create_ap](file:///usr/bin/create_ap). It breaks down the root causes of the issues you encountered, how they were fixed, and provides a quick reference sheet for you to use in the future.
 
+> [!NOTE]
+> Roadblocks A and B below are bugs in the original `create_ap`, which is no longer maintained. The maintained fork, [linux-wifi-hotspot](https://github.com/lakinduakash/linux-wifi-hotspot) (`yay -S linux-wifi-hotspot`), handles these frequencies correctly without patching anything, so `omarchy-hotspot` no longer patches `create_ap`.
+
 ---
 
 ## 1. What Happened Behind the Scenes
