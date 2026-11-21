@@ -131,8 +131,10 @@ fn main() -> io::Result<()> {
     // 6. Spawn create_ap process. SSID and password go through stdin so the
     // password never appears in the process list.
     println!("Starting create_ap...");
+    // --no-haveged: create_ap's low-entropy check always fires on current
+    // kernels (entropy_avail is fixed at 256), and haveged is obsolete.
     let mut child = Command::new("sudo")
-        .args(["create_ap", wifi_iface, internet_iface])
+        .args(["create_ap", "--no-haveged", wifi_iface, internet_iface])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
