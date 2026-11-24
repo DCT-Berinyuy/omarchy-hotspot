@@ -28,6 +28,7 @@ mod credentials;
 mod deps;
 mod radio;
 mod run_dir;
+mod subnet;
 
 use dialoguer::{Input, Select, theme::ColorfulTheme};
 use image::Luma;
@@ -124,6 +125,11 @@ fn main() -> io::Result<()> {
     // The hotspot broadcasts through this card, so its radio has to be on.
     let wifi_switched_on = radio::ensure_on(wifi_iface, internet_iface == wifi_iface, &theme);
 
+    let Some(range) = subnet::pick() else {
+        errln!("Error: Every address range the hotspot can use overlaps a network you're on.");
+        return Ok(());
+    };
+
     let mode = if internet_iface == wifi_iface {
         "Wi-Fi repeater (virtual AP on the same card)"
     } else if wireless_interfaces.contains(internet_iface) {
@@ -137,6 +143,7 @@ fn main() -> io::Result<()> {
     outln!("   Password:  {}", password);
     outln!("   Sharing:   {} -> {}", internet_iface, wifi_iface);
     outln!("   Mode:      {}", mode);
+    outln!("   Addresses: {}", range.describe());
     outln!();
 
     // 5. Setup exit signal handling. Ctrl+C, closing the terminal (SIGHUP) and
@@ -163,8 +170,17 @@ fn main() -> io::Result<()> {
     outln!("Starting create_ap...");
     // --no-haveged: create_ap's low-entropy check always fires on current
     // kernels (entropy_avail is fixed at 256), and haveged is obsolete.
+    // -g: the address range picked above, instead of create_ap's fixed default.
+    let gateway = range.gateway.to_string();
     let mut child = Command::new("sudo")
-        .args(["create_ap", "--no-haveged", wifi_iface, internet_iface])
+        .args([
+            "create_ap",
+            "--no-haveged",
+            "-g",
+            &gateway,
+            wifi_iface,
+            internet_iface,
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
