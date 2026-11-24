@@ -26,6 +26,7 @@ mod clients;
 mod create_ap;
 mod credentials;
 mod deps;
+mod radio;
 mod run_dir;
 
 use dialoguer::{Input, Select, theme::ColorfulTheme};
@@ -119,6 +120,9 @@ fn main() -> io::Result<()> {
         .default(0)
         .interact()?;
     let wifi_iface = &wireless_interfaces[wifi_index];
+
+    // The hotspot broadcasts through this card, so its radio has to be on.
+    let wifi_switched_on = radio::ensure_on(wifi_iface, internet_iface == wifi_iface, &theme);
 
     let mode = if internet_iface == wifi_iface {
         "Wi-Fi repeater (virtual AP on the same card)"
@@ -270,6 +274,8 @@ fn main() -> io::Result<()> {
         let _ = viewer.wait();
     }
     drop(run_dir);
+    // Switch Wi-Fi back off if it was off before the hotspot started.
+    drop(wifi_switched_on);
 
     outln!("Success: Hotspot stopped and cleaned up successfully.");
 
