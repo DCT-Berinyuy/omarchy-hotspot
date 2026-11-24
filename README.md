@@ -33,6 +33,8 @@ Devices then appear below the dashboard as they join and leave:
 *   **Interactive Setup Wizard:** Guided terminal UI prompts to set SSID, WPA2 password (a fresh random one is suggested each run), and interface routing (e.g. sharing Wi-Fi connection over a virtual AP on the same card). The password is passed to `create_ap` over stdin, never on the command line, and the QR image is kept in a private temporary directory that is deleted on exit.
 *   **QR Code Dashboard:** Opens a high-contrast QR code in `imv`, with an ANSI QR code in the terminal as a fallback. Scan it with a phone camera to connect without typing the password.
 *   **Connected Devices:** While the hotspot runs, prints a line whenever a device joins or leaves, with its name and IP address and how many devices are connected.
+*   **Wi-Fi Radio Check:** The hotspot broadcasts through your Wi-Fi card, so Wi-Fi has to be on even when you share a wired connection. If it's turned off, `omarchy-hotspot` offers to turn it on, and turns it back off when the hotspot stops.
+*   **Address Check:** Hotspot devices get addresses in `192.168.12.x`, unless a network you're on already uses that range. Then it picks a free one, such as `192.168.13.x`, so the hotspot never takes another network's addresses, like its router's.
 *   **Safe Signal Cleanup:** Cleanly stops the hotspot it started on `Ctrl+C`, when the terminal window is closed, or on `SIGTERM`, waiting for `create_ap`'s own cleanup and deleting virtual interfaces from your wireless card.
 
 ---
@@ -123,7 +125,10 @@ Plug in your Ethernet cable, run `sudo omarchy-hotspot`, and select:
 *   **Interface providing internet:** your Ethernet interface (e.g. `enp0s31f6`). It is pre-selected when it holds the default route.
 *   **Wi-Fi adapter to broadcast the hotspot:** your wireless card (e.g. `wlp4s0`). Only real wireless adapters are listed here, detected via `/sys/class/net/<iface>/wireless`, so predictable names like `wlp4s0` work.
 
-Your Wi-Fi card does not need to be connected to any network; it only acts as the transmitter.
+Your Wi-Fi card does not need to be connected to any network; it only acts as the transmitter. Its radio does need to be on: if Wi-Fi is turned off, `omarchy-hotspot` offers to turn it on until the hotspot stops.
+
+### `Operation not possible due to RF-kill`
+Wi-Fi is turned off, from the panel or by an airplane-mode key, so the card can't broadcast. `create_ap` also suggests `--no-virt`, which doesn't help here. From v0.3.1, `omarchy-hotspot` offers to turn Wi-Fi on itself. With older versions, turn Wi-Fi on and start again.
 
 ### Card limit exhausted
 If you encounter `RTNETLINK answers: Device or resource busy`, the program will attempt to auto-clean old virtual interfaces. If it persists, you can manually run:
